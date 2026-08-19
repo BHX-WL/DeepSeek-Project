@@ -557,6 +557,11 @@
   ["help-modal", "guide-modal"].forEach((id) => { $(id).addEventListener("click", (e) => { if (e.target === $(id)) $(id).classList.add("hidden"); }); });
 
 
+  // ---------- 更新日志 ----------
+  const CHANGELOG_TEXT = "v0.2.0（2026-08-19）全家桶发布\n🆕 全家桶整合：大事汇总器 + 图片识别 + NapCat 一个安装包，互相调用\n🆕 免责声明：安装前 + 首次强制确认；协议中心（免责/用户协议/隐私/开源许可）\n🆕 二维码登录：自动弹 Windows Photos + 风险警告（用小号）+ 登录后自动关闭\n🆕 机器人检测：自动标注 is_robot 成员并忽略其刷屏\n🆕 本地统计汇总：无 DeepSeek 自动降级（统计+关键词+活跃成员）\n🆕 OCR 互调桥：大事汇总器识别群图 → 图片识别本地 OCR（令牌鉴权）\n🆕 后台运行：图片识别隐藏驻留托盘，自动拉起大事汇总器（第一眼）\n🆕 首次引导 + 帮助中心 + 一键安装脚本\n🔒 安全加固：IPC 发送方校验 / 路径白名单 / XSS 转义 / 日志脱敏\n✅ 修复：启动崩溃（safeHandle 递归）、控制台窗口、撤回忽略、打包 NapCat 依赖\n\nv0.1.0（2026-08）图片识别工具\n本地 OCR（离线中英文）、JSONL 存档 + 全文搜索、NapCat 群图拉取、DeepSeek 总结（可选）";
+  $("btn-changelog").addEventListener("click", () => { $("changelog-body").textContent = CHANGELOG_TEXT; $("changelog-modal").classList.remove("hidden"); });
+  $("btn-changelog-close").addEventListener("click", () => { $("changelog-modal").classList.add("hidden"); });
+
   // ---------- 免责声明与协议 ----------
   const DISCLAIMER_TEXT =
 "图片识别工具全家桶（图片识别 + 大事汇总器 + NapCat）\n" +
