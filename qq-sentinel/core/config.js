@@ -29,6 +29,12 @@ const DEFAULTS = {
     conflictMessageMin: 8,   // 时间窗内最少消息数
     ignoreBotUins: [],       // 补充忽略的官方机器人 QQ 号（默认自动过滤 2854196 号段）
     autoIgnoreBots: true,    // 检测到 is_robot 成员时自动并入 ignoreBotUins
+    burstEnabled: true,      // 突发总结：检测消息激增时段，按 起因→过程→结果 复盘
+    burstBucketMin: 5,       // 突发检测粒度（分钟/桶）
+    burstMinCount: 20,       // 突发绝对阈值：一个桶内至少多少条消息
+    burstMult: 2,            // 突发相对阈值：≥ 该群基线（桶计数中位数）的多少倍
+    burstContextMin: 10,     // 起因上下文：取突发窗口前多少分钟的消息找引爆点
+    burstMax: 5,             // 单次汇总最多列出几个突发
   },
   hotspots: {
     enabled: true,     // 启用热点库（汇总参考 + 消息热梗标记）
