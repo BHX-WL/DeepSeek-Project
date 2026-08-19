@@ -38,6 +38,10 @@ const KIND_LABEL = {
 // ---------- 事件渲染 ----------
 function renderEvent(evt) {
   const kind = evt.kind || "";
+  // 防御：汇总文本中若残留撤回行（旧数据），过滤不显示
+  if (evt.summary && /recall/i.test(evt.summary)) {
+    evt = Object.assign({}, evt, { summary: evt.summary.split("\n").filter((l) => !/^-\s*\[.*\]\s*recall:/i.test(l)).join("\n") });
+  }
   const tag = KIND_LABEL[kind] || kind;
   const body = evt.summary || evt.text || evt.reason || "";
   return `<div class="event-item ${esc(kind)}">
