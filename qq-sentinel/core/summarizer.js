@@ -269,59 +269,57 @@ class Summarizer {
   _localSummarize({ gid, since, until, msgs, anns, evts, hotCtx }) {
     const out = [];
     out.push(`群号 ${gid} · ${fmtPeriod(since)} ~ ${fmtPeriod(until)}`);
-    out.push("（本地统计版：未使用 DeepSeek，基于群消息统计与关键词提取）");
-    // 统计
-    const userCount = new Map();
-    let atAll = 0, images = 0;
-    const hourCount = new Array(24).fill(0);
-    for (const x of msgs) {
-      const k = x.nickname || String(x.userId || "?");
-      userCount.set(k, (userCount.get(k) || 0) + 1);
-      if (x.atAll) atAll++;
-      if (x.images > 0) images += x.images;
-      try {
-        const h = new Date(x.time).getHours();
-        if (h >= 0 && h <= 23) hourCount[h]++;
-      } catch {}
-    }
-    const topUsers = Array.from(userCount.entries()).sort((a, b) => b[1] - a[1]).slice(0, 8);
-    const peak = hourCount.indexOf(Math.max.apply(null, hourCount));
+    out.push("（本地事件版：基于消息事件的自动总结，未使用 DeepSeek）");
     out.push("");
-    const botN = bots.getBots(gid).length;
-    out.push(`【概况】消息 ${msgs.length} 条 · 参与 ${userCount.size} 人 · @全体 ${atAll} 次 · 图片 ${images} 张 · 机器人 ${botN} 个 · 最活跃时段 ${peak}:00`);
-    if (topUsers.length) out.push(`【活跃成员 TOP】${topUsers.map((x) => x[0] + "(" + x[1] + ")").join("、")}`);
-    // 关键词
-    const kws = extractKeywords(msgs, 12);
-    if (kws.length) {
-      out.push(`【高频关键词】${kws.map((k) => k.word + "×" + k.count).join("、")}`);
-      out.push("");
-      out.push("【关键词相关消息摘录】");
-      for (const k of kws.slice(0, 6)) {
-        const sample = msgs.find((x) => x.text && x.text.includes(k.word));
-        if (sample) {
-          out.push(`- [${(sample.time || "").slice(11, 16)}] ${sample.nickname || sample.userId}: ${String(sample.text || "").slice(0, 80)}`);
-        }
+    // 1) 图片事件（发图/产粮聚类）
+    const imgClusters = clusterImages(msgs);
+    if (imgClusters.length) {
+      for (const cl of imgClusters) {
+        const hint = cl.count >= 10 ? "（疑似产粮/分享/图楼）" : "";
+        out.push(`🖼️ ${fmtPeriod(cl.from)}~${fmtPeriod(cl.to)}：${cl.users.join("、")} 连发 ${cl.count} 张图${hint}`);
       }
+      out.push("");
     }
+    // 2) 创作动态（产粮/画/写文/新作等）
+    const creations = findCreation(msgs);
+    if (creations.length) {
+      for (const cr of creations.slice(0, 8)) out.push(`✏️ ${cr.nickname}：${cr.text.slice(0, 70)}`);
+      out.push("");
+    }
+    // 3) @全体 / 长消息
+    for (const m of msgs.filter((x) => x.atAll).slice(0, 10)) {
+      out.push(`📢 ${m.nickname || m.userId} 发起了@全体：${String(m.text || "").slice(0, 80)}`);
+    }
+    const seenLong = new Set();
+    for (const m of msgs.filter((x) => x.text && x.text.length >= 100)) {
+      const key = String(m.text).slice(0, 60);
+      if (seenLong.has(key)) continue;
+      seenLong.add(key);
+      out.push(`💬 ${m.nickname || m.userId} 发了一条长消息：${String(m.text).slice(0, 70)}…`);
+      if (seenLong.size >= 8) break;
+    }
+    // 4) 复读/刷屏主题
+    for (const r of findRepeats(msgs).slice(0, 8)) {
+      out.push(`🔁 「${r.text.slice(0, 40)}」被重复 ${r.count} 次（${r.users.join("、")}）`);
+    }
+    // 5) 高峰时段
+    const peaks = peakHours(msgs);
+    if (peaks.length) out.push(`⏰ 消息最活跃时段：${peaks.map((x) => x.h + ":00（" + x.c + " 条）").join("、")}`);
+    // 6) 公告
     if (anns.length) {
       out.push("");
       out.push(`【群公告 ${anns.length} 条】`);
       for (const a of anns) out.push(`- [${(a.time || "").slice(0, 16)}] ${a.title}：${String(a.content || "").slice(0, 200)}`);
     }
+    // 7) 事件
     if (evts.length) {
       out.push("");
       out.push(`【事件 ${evts.length} 条】`);
-      for (const e of evts) out.push(`- [${(e.time || "").slice(0, 16)}] ${e.kind}: ${e.title}`);
+      for (const e of evts) out.push(`- [${(e.time || "").slice(0, 16)}] ${e.title}`);
     }
-    // 热点关联：热词与群关键词交叉
-    if (hotCtx && kws.length) {
-      const hotWords = (hotCtx.match(/[一二三四五六七八九十百\d]+[、.．]\s*[^\n，。]{2,20}/g) || [])
-        .map((s) => s.replace(/^[一二三四五六七八九十百\d]+[、.．]\s*/, "").trim())
-        .filter((w) => w.length >= 4);
-      const hits = hotWords.filter((w) => kws.some((k) => w.includes(k.word) || k.word.includes(w))).slice(0, 5);
-      out.push("");
-      out.push(`【热点关联】${hits.length ? hits.join("、") : "无显著关联"}`);
-    }
+    // 8) 讨论焦点（一句话）
+    const kws = extractKeywords(msgs, 8);
+    if (kws.length) out.push(`【讨论焦点】${kws.map((k) => k.word).join("、")}`);
     return out.join("\n");
   }
 
@@ -356,6 +354,71 @@ const STOP_WORDS = new Set([
 ]);
 
 // 本地关键词提取：英文/数字词 + 中文 2~4 字片段（简单无分词器方案）
+
+// 图片事件聚类：10 分钟内连续图片消息聚成一波
+function clusterImages(msgs) {
+  const imgs = msgs.filter((m) => m.images > 0).sort((a, b) => String(a.time).localeCompare(String(b.time)));
+  const clusters = [];
+  for (const m of imgs) {
+    const t = new Date(m.time).getTime();
+    if (!Number.isFinite(t)) continue;
+    const last = clusters[clusters.length - 1];
+    if (last && t - last.endT <= 10 * 60000) {
+      last.endT = t; last.count += m.images; last.users.add(m.nickname || String(m.userId));
+    } else {
+      clusters.push({ startT: t, endT: t, count: m.images, users: new Set([m.nickname || String(m.userId)]) });
+    }
+  }
+  return clusters
+    .filter((cl) => cl.count >= 3)
+    .map((cl) => ({
+      from: new Date(cl.startT).toISOString(),
+      to: new Date(cl.endT).toISOString(),
+      count: cl.count,
+      users: Array.from(cl.users).slice(0, 3),
+    }))
+    .slice(0, 6);
+}
+
+// 创作动态：包含产粮/画/写文/新作/更新等信号的消息
+function findCreation(msgs) {
+  const re = /产粮|画了|摸鱼|写了|新作|更新了|发布了|完工|出图|投稿|肝完/;
+  return msgs
+    .filter((m) => m.text && re.test(m.text) && String(m.text).length <= 100)
+    .map((m) => ({ nickname: m.nickname || String(m.userId), text: String(m.text) }))
+    .slice(0, 12);
+}
+
+// 复读/刷屏：相同文本出现 >=5 次
+function findRepeats(msgs) {
+  const map = new Map();
+  for (const m of msgs) {
+    const t = String(m.text || "").trim();
+    if (!t || t.length < 4 || t.length > 80) continue;
+    if (/^\[?(图片|视频|卡片消息|表情|动画表情|语音|回复)\]?$/.test(t)) continue; // 占位文本不算复读
+    if (!map.has(t)) map.set(t, { count: 0, users: new Set() });
+    const e = map.get(t);
+    e.count++;
+    e.users.add(m.nickname || String(m.userId));
+  }
+  return Array.from(map.entries())
+    .filter(([, e]) => e.count >= 5)
+    .map(([text, e]) => ({ text, count: e.count, users: Array.from(e.users).slice(0, 3) }))
+    .sort((a, b) => b.count - a.count);
+}
+
+// 消息高峰时段（Top2）
+function peakHours(msgs) {
+  const h = new Array(24).fill(0);
+  for (const m of msgs) {
+    try {
+      const x = new Date(m.time).getHours();
+      if (x >= 0 && x <= 23) h[x]++;
+    } catch {}
+  }
+  return h.map((cnt, i) => ({ h: i, c: cnt })).filter((x) => x.c > 0).sort((a, b) => b.c - a.c).slice(0, 2);
+}
+
 function extractKeywords(msgs, topN) {
   const freq = new Map();
   const push = (w) => {
