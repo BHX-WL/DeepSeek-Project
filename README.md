@@ -1,5 +1,16 @@
 # QQ 群大事监控全家桶（ImgOCR + QQ Sentinel + NapCat）
 
+## 🚀 一键安装（推荐）
+
+> **Windows 用户**：下载并双击 `一键安装.bat`，脚本会自动下载安装包并启动安装程序。
+> 或直接下载安装包：[**ImgOCR.Setup.0.2.0.exe**（208MB）](https://github.com/BHX-WL/DeepSeek-Project/releases/latest) ← **点击即下载**
+
+安装流程：同意免责声明 → 安装 → 打开「大事汇总器全家桶」→ 按首次引导操作（**用小号扫码登录**）。
+
+> 需要源码/自己构建的开发者请看下方「从源码构建」。
+
+---# QQ 群大事监控全家桶（ImgOCR + QQ Sentinel + NapCat）
+
 一个安装包 = 三件套，互相联动，**用户第一眼看到的是大事汇总器**：
 
 | 组件 | 作用 |
