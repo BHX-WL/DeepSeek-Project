@@ -181,7 +181,7 @@ function isTrustedSender(event) {
   } catch { return false; }
 }
 function safeHandle(channel, handler) {
-  safeHandle(channel, (event, ...args) => {
+  ipcMain.handle(channel, (event, ...args) => {
     if (!isTrustedSender(event)) {
       L.warn("[main] 拒绝非本窗口 IPC: " + channel);
       return { ok: false, error: "拒绝：非法 IPC 调用来源" };
