@@ -1,0 +1,751 @@
+// renderer/app.js — 渲染层逻辑
+const $ = (sel) => document.querySelector(sel);
+const $$ = (sel) => [...document.querySelectorAll(sel)];
+
+const api = window.sentinelApi;
+let state = { groups: [], events: {}, reports: {}, conn: false, currentGroup: null };
+
+// ---------- 工具 ----------
+function toast(msg, ms = 2600) {
+  const t = $("#toast");
+  t.textContent = msg;
+  t.classList.remove("hidden");
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => t.classList.add("hidden"), ms);
+}
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function fmtTime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+function groupName(gid) {
+  const g = state.groups.find((x) => x.groupId === String(gid));
+  return g ? g.name : `群${gid}`;
+}
+
+const KIND_LABEL = {
+  at_all: "全体", announcement: "公告", recall: "撤回", admin_change: "管理",
+  member_left: "退群", member_joined: "进群", conflict: "冲突", at_me: "提到我",
+  daily: "汇总", summary: "汇总", group_notice: "通知", group_essence: "精华", group_poke: "戳一戳",
+};
+
+// ---------- 事件渲染 ----------
+function renderEvent(evt) {
+  const kind = evt.kind || "";
+  const tag = KIND_LABEL[kind] || kind;
+  const body = evt.summary || evt.text || evt.reason || "";
+  return `<div class="event-item ${esc(kind)}">
+    <div class="event-head">
+      <span class="event-title"><span class="event-tag">${esc(tag)}</span>${esc(evt.title || "")}</span>
+      <span class="event-time">${fmtTime(evt.time || evt.createdAt)}</span>
+    </div>
+    ${body ? `<div class="event-body">${esc(body)}</div>` : ""}
+  </div>`;
+}
+
+function fillEvents(el, events, emptyText = "暂无大事记录") {
+  events = (events || []).filter((e) => e.kind !== "recall"); // 撤回不是大事，不显示
+  if (!events || events.length === 0) {
+    el.innerHTML = `<div class="empty">${esc(emptyText)}</div>`;
+    return;
+  }
+  el.innerHTML = events.map(renderEvent).join("");
+}
+
+// ---------- 总览 ----------
+async function renderOverview() {
+  const stats = await api.appStats();
+  const gs = stats.groups || [];
+  const totalMsgs = gs.reduce((a, g) => a + (g.messages || 0), 0);
+  const watched = gs.filter((g) => g.watched).length;
+  let recentEvents = [];
+  for (const g of gs) {
+    const evts = await api.eventsGet(g.groupId, 20);
+    recentEvents = recentEvents.concat(evts.filter((e) => e.kind !== "daily"));
+  }
+  recentEvents.sort((a, b) => (b.time || "").localeCompare(a.time || ""));
+  recentEvents = recentEvents.slice(0, 30);
+  // 热点库状态（多平台缓存）
+  let hotTxt = "-";
+  try {
+    const h = await api.hotspotsStatus();
+    if (h && h.cached && h.platforms) {
+      const parts = [];
+      if (h.platforms.weibo?.count) parts.push(`微博${h.platforms.weibo.count}`);
+      if (h.platforms.douyin?.count) parts.push(`抖音${h.platforms.douyin.count}`);
+      if (h.platforms.bilibili?.count) parts.push(`B站${h.platforms.bilibili.count}`);
+      hotTxt = parts.length ? parts.join(" ") : "热点库空";
+    } else if (h && h.cached) hotTxt = `${h.count} 条热点`;
+  } catch {}
+
+  $("#overview-stats").innerHTML = `
+    <div class="stat-card"><div class="num">${gs.length}</div><div class="lbl">监听群数</div></div>
+    <div class="stat-card"><div class="num">${watched}</div><div class="lbl">正在关注</div></div>
+    <div class="stat-card"><div class="num">${totalMsgs}</div><div class="lbl">累计消息</div></div>
+    <div class="stat-card"><div class="num">${state.conn ? "在线" : "离线"}</div><div class="lbl">机器人连接</div></div>
+    <div class="stat-card"><div class="num" style="font-size:13px">${esc(hotTxt)}</div><div class="lbl">热点库</div></div>
+  `;
+  fillEvents($("#overview-events"), recentEvents);
+}
+
+// ---------- 指定爬取群管理 ----------
+async function getSpecGroups() {
+  try {
+    const w = await api.configGet("watch");
+    return Array.isArray(w?.groups) ? w.groups.filter(Boolean).map(String) : [];
+  } catch { return []; }
+}
+
+async function renderSpecGroups() {
+  const list = await getSpecGroups();
+  const box = $("#spec-list");
+  const hint = $("#spec-hint");
+  if (!box) return;
+  if (list.length === 0) {
+    box.innerHTML = '<span class="spec-hint">未指定 → 当前采集全部群</span>';
+    if (hint) hint.textContent = "提示：指定群后，只有这些群的消息会被采集/汇总，其他群一律不处理。";
+    return;
+  }
+  box.innerHTML = list.map((gid) => (
+    '<span class="spec-chip">群 ' + esc(gid) + ' <span class="del" data-del="' + esc(gid) + '" title="移出">✕</span></span>'
+  )).join("");
+  if (hint) hint.textContent = "已指定 " + list.length + " 个群，其他群不采集。";
+  box.querySelectorAll(".del").forEach((d) => {
+    d.addEventListener("click", async () => {
+      const gid = d.dataset.del;
+      const cur = await getSpecGroups();
+      const w = await api.configGet("watch") || {};
+      await api.configSet("watch", { ...w, groups: cur.filter((g) => g !== gid) });
+      toast("已移出群 " + gid);
+      renderSpecGroups();
+      renderGroups();
+    });
+  });
+}
+
+async function addSpecGroup() {
+  const input = $("#spec-gid-input");
+  const gid = (input.value || "").trim();
+  if (!/^\d+$/.test(gid)) { toast("请输入纯数字群号"); return; }
+  const cur = await getSpecGroups();
+  if (cur.includes(gid)) { toast("该群已在指定列表中"); return; }
+  const w = await api.configGet("watch") || {};
+  await api.configSet("watch", { ...w, groups: [...cur, gid] });
+  input.value = "";
+  toast("已指定群 " + gid + "（只采集该群）");
+  renderSpecGroups();
+  renderGroups();
+}
+
+// ---------- 从群列表选择（小号所在的群 → 勾选要采集的群） ----------
+let _pickGroups = [];   // 当前模态框数据 [{groupId,name,memberCount,checked}]
+let _pickKeyword = "";  // 搜索关键词
+
+async function openSpecPicker() {
+  const modal = $("#spec-pick-modal");
+  const listBox = $("#spec-pick-list");
+  const hint = $("#spec-pick-hint");
+  if (!modal) return;
+  listBox.innerHTML = '<div class="spec-pick-empty">正在从小号拉取群列表…</div>';
+  if (hint) hint.textContent = "";
+  $("#spec-pick-search").value = "";
+  $("#spec-pick-count").textContent = "";
+  modal.classList.remove("hidden");
+
+  // 拉取小号所在的全部群（只读）
+  let res;
+  try { res = await api.groupsFromRemote(); } catch (e) { res = { ok: false, error: e?.message || e }; }
+  if (!res || !res.ok) {
+    listBox.innerHTML = '<div class="spec-pick-empty">❌ 拉取群列表失败：' + esc(res?.error || "未知错误") + '<br><span style="font-size:12px">请确认已连接 NapCat 且小号在线</span></div>';
+    return;
+  }
+  const cur = await getSpecGroups();
+  const remote = Array.isArray(res.groups) ? res.groups : [];
+  _pickGroups = remote.map((g) => ({
+    groupId: String(g.groupId ?? ""),
+    name: String(g.name ?? "").trim() || "群" + (g.groupId ?? ""),
+    memberCount: Number(g.memberCount || 0),
+    checked: cur.includes(String(g.groupId)),
+  })).filter((g) => g.groupId);
+  if (!_pickGroups.length) {
+    listBox.innerHTML = '<div class="spec-pick-empty">小号当前不在任何群中</div>';
+    return;
+  }
+  renderSpecPickList();
+}
+
+function renderSpecPickList() {
+  const listBox = $("#spec-pick-list");
+  const kw = _pickKeyword.trim().toLowerCase();
+  const shown = _pickGroups.filter((g) =>
+    !kw || g.groupId.includes(kw) || g.name.toLowerCase().includes(kw)
+  );
+  const checkedCount = _pickGroups.filter((g) => g.checked).length;
+  $("#spec-pick-count").textContent = `共 ${_pickGroups.length} 个群，已选 ${checkedCount} 个`;
+  if (!shown.length) {
+    listBox.innerHTML = '<div class="spec-pick-empty">没有匹配的群</div>';
+    return;
+  }
+  listBox.innerHTML = shown.map((g, i) => `
+    <label class="spec-pick-item">
+      <input type="checkbox" data-idx="${i}" ${g.checked ? "checked" : ""}>
+      <span class="gname">${esc(g.name)}</span>
+      <span class="gmeta">${esc(g.groupId)} · ${Number(g.memberCount) || "?"} 人</span>
+      ${g.checked ? '<span class="gtag">已指定</span>' : ""}
+    </label>
+  `).join("");
+  // 注意：shown 的索引对应 _pickGroups 的索引（过滤后仍用原索引），点击时同步回 _pickGroups
+  listBox.querySelectorAll("input").forEach((input) => {
+    input.addEventListener("change", () => {
+      const idx = Number(input.dataset.idx);
+      if (_pickGroups[idx]) _pickGroups[idx].checked = input.checked;
+      renderSpecPickList(); // 刷新计数与"已指定"标签
+    });
+  });
+}
+
+async function applySpecPicker() {
+  const picked = _pickGroups.filter((g) => g.checked).map((g) => g.groupId);
+  const w = await api.configGet("watch") || {};
+  await api.configSet("watch", { ...w, groups: picked });
+  closeSpecPicker();
+  toast(picked.length ? `已指定 ${picked.length} 个群（只采集这些群）` : "已清空指定群（将采集全部群）");
+  renderSpecGroups();
+  renderGroups();
+}
+
+function closeSpecPicker() {
+  const modal = $("#spec-pick-modal");
+  if (modal) modal.classList.add("hidden");
+  _pickGroups = [];
+  _pickKeyword = "";
+}
+
+// ---------- 群列表 ----------
+async function renderGroups() {
+  const gs = await api.groupsList();
+  state.groups = gs;
+  const wrap = $("#groups-list");
+  if (!gs.length) {
+    wrap.innerHTML = `<div class="empty">暂无群。连接机器人后自动发现群，或刷新。</div>`;
+    return;
+  }
+  let botsAll = {};
+  try { botsAll = (await api.botsGetAll()).bots || {}; } catch {}
+  const spec = await getSpecGroups();
+  const inSpec = (gid) => spec.length === 0 || spec.includes(String(gid));
+  wrap.innerHTML = gs.map((g) => `
+    <div class="group-card">
+      <label class="watch-toggle switch" title="勾选 = 加入指定爬取群">
+        <input type="checkbox" data-gid="${esc(g.groupId)}" ${inSpec(g.groupId) ? "checked" : ""}>
+        <span class="slider"></span>
+      </label>
+      <div class="gname">${esc(g.name)}</div>
+      <div class="gmeta">群号 ${esc(g.groupId)} · ${Number(g.memberCount) || "?"} 人</div>
+      <div class="gstat">${Number(g.messages) || 0} 条消息 · 最近 ${fmtTime(g.lastActive) || "-"}</div>
+      ${(botsAll[String(g.groupId)] || []).length ? `<div class="gbots">🤖 机器人：${(botsAll[String(g.groupId)] || []).map((b) => esc(b.nickname)).join("、")}</div>` : ""}
+    </div>
+  `).join("");
+  $$("#groups-list .switch input").forEach((input) => {
+    input.addEventListener("change", async () => {
+      const gid = input.dataset.gid;
+      try {
+        const cur = await getSpecGroups();
+        const w = await api.configGet("watch") || {};
+        if (input.checked) {
+          if (!cur.includes(gid)) await api.configSet("watch", { ...w, groups: [...cur, gid] });
+          toast("已指定群 " + gid + "（开始采集）");
+        } else {
+          await api.configSet("watch", { ...w, groups: cur.filter((g) => g !== gid) });
+          toast("已移出群 " + gid + "（不再采集）");
+        }
+        renderSpecGroups();
+      } catch (e) {
+        toast("设置失败：" + (e?.message || e));
+      }
+    });
+  });
+  // 填充下拉
+  fillGroupSelects();
+}
+
+$("#btn-scan-bots").addEventListener("click", async () => {
+  toast("正在检测各群机器人…");
+  const r = await api.botsScan();
+  if (r && r.ok) {
+    const n = Object.values(r.all || {}).reduce((s, arr) => s + arr.length, 0);
+    toast("✅ 检测完成，共标注 " + n + " 个机器人");
+    renderGroups();
+  } else {
+    toast("检测失败：" + ((r && r.error) || "未知"));
+  }
+});
+
+function fillGroupSelects() {
+  const opts = state.groups.map((g) => `<option value="${esc(g.groupId)}">${esc(g.name)}</option>`).join("");
+  $("#timeline-group").innerHTML = opts;
+  $("#report-group").innerHTML = opts;
+  if (state.currentGroup) {
+    $("#timeline-group").value = state.currentGroup;
+    $("#report-group").value = state.currentGroup;
+  }
+}
+
+// ---------- 时间线 ----------
+async function renderTimeline() {
+  const gid = $("#timeline-group").value;
+  if (!gid) { $("#timeline-events").innerHTML = `<div class="empty">请先选择一个群</div>`; return; }
+  state.currentGroup = gid;
+  const evts = await api.eventsGet(gid, 200);
+  fillEvents($("#timeline-events"), evts, "该群暂无大事记录");
+}
+
+// ---------- 报告 ----------
+// datetime-local 值（本地时间）→ ISO 字符串（UTC），带时区偏移，保证语义正确
+function dtLocalToISO(v) {
+  if (!v) return null;
+  const d = new Date(v); // 浏览器会把 "YYYY-MM-DDTHH:mm" 当本地时间解析
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString();
+}
+
+async function renderReports() {
+  const gid = $("#report-group").value;
+  if (!gid) { $("#report-list").innerHTML = `<div class="empty">请先选择一个群</div>`; return; }
+  state.currentGroup = gid;
+  const evts = await api.eventsGet(gid, 500);
+  const reports = evts.filter((e) => e.kind === "daily" || e.kind === "summary" || e.kind === "conflict");
+  fillEvents($("#report-list"), reports, "暂无汇总报告，点击「默认汇总」或选择时段生成");
+}
+
+// ---------- 连接状态 ----------
+async function refreshStatus() {
+  const st = await api.botStatus();
+  state.conn = st.connected;
+  const el = $("#conn-status");
+  if (st.connected) {
+    el.textContent = `已连接 ${st.selfId ? `(${st.selfId})` : ""}`;
+    el.classList.add("on");
+    $("#btn-connect").textContent = "断开";
+  } else {
+    el.textContent = "未连接";
+    el.classList.remove("on");
+    $("#btn-connect").textContent = "连接";
+  }
+}
+
+// ---------- 设置加载/保存 ----------
+async function loadSettings() {
+  const d = await api.configGet("deepseek");
+  const n = await api.configGet("napcat");
+  const w = await api.configGet("watch");
+  const s = await api.configGet("summarize");
+  const h = await api.configGet("hotspots");
+  const o = await api.configGet("ocr");
+  $("#set-ds-key").value = d.apiKey || "";
+  $("#set-ds-model").value = d.model || "";
+  $("#set-ds-base").value = d.baseUrl || "";
+  $("#set-mode").value = n.mode || "forward";
+  $("#set-ws-url").value = n.wsUrl || "";
+  $("#set-reverse-port").value = n.reversePort || 3002;
+  $("#set-token").value = n.token || "";
+  $("#set-history-days").value = w.collectHistoryDays ?? 3;
+  $("#set-daily-hour").value = s.dailyHour ?? 22;
+  $("#set-default-days").value = s.defaultDays ?? 7;
+  $("#set-groups").value = (w.groups || []).join(",");
+  $("#set-qq-path").value = n.qqPath || "";
+  $("#set-data-dir").value = n.dataDir || "D:\\QQNT-MULTI-DATA";
+  $("#set-conflicts").checked = !!s.includeConflicts;
+  $("#set-auto-ignore-bots").checked = s.autoIgnoreBots !== false;
+  $("#set-conflict-win").value = s.conflictWindowMin ?? 10;
+  $("#set-conflict-min").value = s.conflictMessageMin ?? 8;
+  $("#set-hotspots").checked = h.enabled !== false;
+  $("#set-hotspots-cache").value = h.cacheMinutes ?? 15;
+  $("#set-ocr-url").value = (o && o.bridgeUrl) || "http://127.0.0.1:8765";
+  $("#set-ocr-token").value = (o && o.bridgeToken) || "";
+  const hp = h.platforms || ["weibo", "douyin", "bilibili"];
+  $("#set-hot-weibo").checked = hp.includes("weibo");
+  $("#set-hot-douyin").checked = hp.includes("douyin");
+  $("#set-hot-bilibili").checked = hp.includes("bilibili");
+  // 启动相关：开机自启状态（注册表）、NapCat 自动启动
+  try {
+    const as = await api.autostartGet();
+    $("#set-autostart").checked = !!(as && as.enabled);
+    $("#set-auto-launch-napcat").checked = n.autoLaunch !== false;
+  } catch {}
+}
+
+async function saveSettings() {
+  await api.configSet("deepseek", {
+    apiKey: $("#set-ds-key").value.trim(),
+    model: $("#set-ds-model").value.trim() || "deepseek-chat",
+    baseUrl: $("#set-ds-base").value.trim() || "https://api.deepseek.com",
+  });
+  await api.configSet("napcat", {
+    mode: $("#set-mode").value,
+    wsUrl: $("#set-ws-url").value.trim() || "ws://127.0.0.1:3001",
+    reversePort: parseInt($("#set-reverse-port").value, 10) || 3002,
+    token: $("#set-token").value.trim(),
+    autoLaunch: $("#set-auto-launch-napcat").checked,
+    qqPath: $("#set-qq-path").value.trim(),
+    dataDir: $("#set-data-dir").value.trim() || "D:\\QQNT-MULTI-DATA",
+  });
+  // 开机自启写注册表
+  try {
+    const as = await api.autostartSet($("#set-autostart").checked);
+    if (!as.ok) toast("开机自启设置失败：" + (as.error || ""));
+  } catch {}
+
+  await api.configSet("watch", {
+    collectHistoryDays: parseInt($("#set-history-days").value, 10) || 3,
+    groups: $("#set-groups").value.split(",").map((s) => s.trim()).filter(Boolean),
+  });
+  await api.configSet("summarize", {
+    dailyHour: parseInt($("#set-daily-hour").value, 10) || 22,
+    defaultDays: parseInt($("#set-default-days").value, 10) || 7,
+    includeConflicts: $("#set-conflicts").checked,
+    conflictWindowMin: parseInt($("#set-conflict-win").value, 10) || 10,
+    conflictMessageMin: parseInt($("#set-conflict-min").value, 10) || 8,
+    autoIgnoreBots: $("#set-auto-ignore-bots").checked,
+  });
+  await api.configSet("ocr", {
+    bridgeUrl: $("#set-ocr-url").value.trim() || "http://127.0.0.1:8765",
+    bridgeToken: $("#set-ocr-token").value.trim(),
+  });
+  await api.configSet("hotspots", {
+    enabled: $("#set-hotspots").checked,
+    cacheMinutes: parseInt($("#set-hotspots-cache").value, 10) || 15,
+    platforms: ["weibo", "douyin", "bilibili"].filter((p) => {
+      const el = { weibo: $("#set-hot-weibo"), douyin: $("#set-hot-douyin"), bilibili: $("#set-hot-bilibili") }[p];
+      return el && el.checked;
+    }),
+  });
+  const hint = $("#settings-saved");
+  hint.textContent = "✓ 已保存";
+  hint.classList.add("show");
+  setTimeout(() => { hint.textContent = ""; hint.classList.remove("show"); }, 2000);
+  toast("设置已保存");
+}
+
+// ---------- NapCat 状态 ----------
+async function renderNapcat() {
+  const st = await api.napcatStatus();
+  const el = $("#napcat-status");
+  el.innerHTML = `
+    <div class="stat-cards" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr))">
+      <div class="stat-card"><div class="num">${st.installed ? "✅" : "❌"}</div><div class="lbl">已安装</div></div>
+      <div class="stat-card"><div class="num">${st.running ? "▶️" : "⏸️"}</div><div class="lbl">运行中</div></div>
+      <div class="stat-card"><div class="num">${st.installing ? "…" : "-"}</div><div class="lbl">安装中</div></div>
+    </div>
+    <div style="margin-top:10px;font-size:12.5px;color:var(--muted)">
+      安装目录：<code>${esc(st.dir)}</code><br>
+      模式：<code>${esc(st.mode || "injector")}</code>（注入器 ${st.injectorReady ? "✅" : "❌ 缺失，回退官方启动器"}）<br>
+      QQ 路径：<code>${esc(st.qqPath || "未探测到")}</code><br>
+      小号独立数据目录：<code>${esc(st.dataDir || "-")}</code>
+    </div>
+  `;
+}
+
+// ---------- 导航 ----------
+function switchTab(tab) {
+  state.activeTab = tab; // 记录当前 tab（bot:event 据此刷新总览）
+  $$(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
+  $$(".tab-pane").forEach((p) => p.classList.toggle("active", p.id === `tab-${tab}`));
+  if (tab === "overview") renderOverview();
+  if (tab === "groups") { renderSpecGroups(); renderGroups(); }
+  if (tab === "timeline") renderTimeline();
+  if (tab === "reports") { initReportPeriod(); renderReports(); }
+  if (tab === "napcat") renderNapcat();
+  if (tab === "settings") loadSettings();
+}
+
+// 初始化自定义时段默认值：开始=7天前 0 点，结束=今天现在（本地时间）
+function initReportPeriod() {
+  const since = $("#summary-since");
+  const until = $("#summary-until");
+  if (!since || !until) return;
+  if (since.value && until.value) return; // 已设置过则保留
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  const fmtLocal = (d) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const weekAgo = new Date(now.getTime() - 7 * 86400000);
+  since.value = fmtLocal(weekAgo);
+  until.value = fmtLocal(now);
+}
+
+// ---------- 事件绑定 ----------
+function bind() {
+  $$(".nav-item").forEach((b) => b.addEventListener("click", () => switchTab(b.dataset.tab)));
+
+  $("#btn-connect").addEventListener("click", async () => {
+    if (state.conn) {
+      await api.botDisconnect();
+      toast("已断开");
+      refreshStatus();
+      return;
+    }
+    toast("正在连接…");
+    const r = await api.botConnect();
+    if (r && r.ok === false) {
+      // 连接被拒绝（如 NapCat 未安装）：显示具体原因
+      toast("❌ " + (r.error || "连接失败"), 6000);
+      if (r.needNapcat) {
+        setTimeout(() => { toast("提示：请先在「NapCat」页下载安装 NapCat 并扫码登录", 6000); }, 200);
+      }
+    } else {
+      toast("已发起连接，等待 NapCat 响应…");
+      setTimeout(refreshStatus, 1500);
+    }
+  });
+
+  // 连接过程反馈
+  api.on("bot:connecting", (p) => { if (p?.hint) toast(p.hint, 4000); });
+  api.on("bot:connect-failed", (p) => {
+    toast("❌ " + (p?.error || "连接失败"), 8000);
+    refreshStatus();
+  });
+
+  $("#btn-summarize").addEventListener("click", async () => {
+    toast("正在汇总全部群…");
+    const r = await api.summaryAll();
+    if (r.ok) toast(`汇总完成：${r.results.filter((x) => x.ok).length}/${r.results.length} 个群成功`);
+    else toast("汇总失败：" + (r.error || ""));
+    if (state.activeTab === "reports") renderReports();
+  });
+
+  $("#btn-refresh-groups").addEventListener("click", async () => {
+    toast("刷新群列表…");
+    await api.botStatus();
+    await renderGroups();
+  });
+
+  $("#btn-ocr-images").addEventListener("click", async () => {
+  const gid = $("#timeline-group").value;
+  if (!gid) { toast("请先选择一个群"); return; }
+  const limit = parseInt($("#ocr-img-limit").value, 10) || 10;
+  toast("正在拉取群图并调用图片识别工具…");
+  const r = await api.ocrGroupImages({ gid, limit });
+  if (r && r.ok) {
+    toast(r.total ? "✅ 识别 " + r.okCount + "/" + r.total + " 张，结果已写入时间线" : (r.note || "无图片"));
+    renderTimeline();
+  } else {
+    toast("识别失败：" + ((r && r.error) || "未知"));
+  }
+});
+
+$("#btn-ocr-ping").addEventListener("click", async () => {
+  const r = await api.ocrPing();
+  $("#ocr-ping-hint").textContent = r && r.ok ? "✅ 图片识别服务在线" + (r.tokenFound ? "（令牌已就绪）" : "（未找到令牌，请设置）") : "❌ " + ((r && r.error) || "连接失败");
+});
+
+$("#btn-open-imgocr").addEventListener("click", async () => {
+  const r = await api.hubOpenImgocr();
+  toast(r && r.ok ? "已打开图片识别工具" : "打开失败：" + ((r && r.error) || ""));
+});
+
+$("#btn-backfill").addEventListener("click", async () => {
+    const gid = $("#timeline-group").value;
+    if (!gid) { toast("请先选择一个群"); return; }
+    const days = parseInt($("#backfill-days").value, 10) || 3;
+    toast(`正在回拉群 ${gid} 历史（${days} 天）…`);
+    const r = await api.backfill(gid, days);
+    toast(`回拉完成：${r.pulled} 条`);
+    renderTimeline();
+  });
+
+  $("#btn-backfill-all").addEventListener("click", async () => {
+    const days = parseInt($("#backfill-days").value, 10) || 3;
+    toast(`正在回拉全部指定群历史（${days} 天）…`);
+    const r = await api.backfillAll(days);
+    const okN = (r.results || []).filter((x) => x.pulled > 0).length;
+    const total = (r.results || []).reduce((s, x) => s + (x.pulled || 0), 0);
+    toast(`回拉完成：${okN}/${(r.results || []).length} 个群，共 ${total} 条`);
+    renderTimeline();
+    renderGroups();
+  });
+
+  // 默认汇总：窗口 = max(上次汇总时间, 现在-默认天数) → 现在
+  $("#btn-summary-default").addEventListener("click", async () => {
+    const gid = $("#report-group").value;
+    if (!gid) { toast("请先选择一个群"); return; }
+    toast("正在默认汇总（一周/上次起）…");
+    const r = await api.summaryRun(gid, { mode: "default" });
+    if (r.ok) { toast("汇总完成：" + (r.stats?.messages || 0) + " 条消息"); renderReports(); }
+    else toast("失败：" + (r.error || ""));
+  });
+
+  // 自定义时段汇总（单群）
+  $("#btn-summary-period").addEventListener("click", async () => {
+    const gid = $("#report-group").value;
+    if (!gid) { toast("请先选择一个群"); return; }
+    const since = dtLocalToISO($("#summary-since").value);
+    const until = dtLocalToISO($("#summary-until").value);
+    if (!since || !until) { toast("请选择开始和结束时间"); return; }
+    toast("正在汇总该时段…");
+    const r = await api.summaryRun(gid, { mode: "period", since, until });
+    if (r.ok) { toast(`汇总完成（${r.stats?.messages || 0} 条消息）`); renderReports(); }
+    else toast("失败：" + (r.error || ""));
+  });
+
+  // 自定义时段汇总（全部指定群）
+  $("#btn-summary-period-all").addEventListener("click", async () => {
+    const since = dtLocalToISO($("#summary-since").value);
+    const until = dtLocalToISO($("#summary-until").value);
+    if (!since || !until) { toast("请选择开始和结束时间"); return; }
+    toast("正在为全部指定群汇总该时段…");
+    const r = await api.summaryAll({ mode: "period", since, until });
+    const okN = (r.results || []).filter((x) => x.ok).length;
+    toast(`完成：${okN}/${(r.results || []).length} 个群`);
+    renderReports();
+  });
+
+  $("#btn-napcat-launch").addEventListener("click", async () => {
+    const r = await api.napcatLaunch();
+    toast(r.ok ? "NapCat 已启动" : (r.error || "启动失败"));
+    setTimeout(renderNapcat, 1000);
+  });
+  $("#btn-napcat-install").addEventListener("click", async () => {
+    toast("开始下载安装 NapCat…（约几十 MB，请稍候）");
+    const r = await api.napcatInstall({});
+    if (r.ok) toast(`安装完成：${r.tag}`);
+    else toast("安装失败：" + (r.error || ""));
+    renderNapcat();
+  });
+  $("#btn-napcat-logs").addEventListener("click", async () => {
+  const r = await api.napcatLogs();
+  toast(r && r.ok ? "已打开 NapCat 日志目录" : (r && r.error) || "打开失败");
+});
+
+$("#btn-qr-show").addEventListener("click", async () => {
+  const r = await api.qrShow();
+  toast(r && r.opened ? "已打开登录二维码" : "未检测到登录二维码（NapCat 可能已登录）");
+});
+
+$("#btn-napcat-stop").addEventListener("click", async () => {
+    await api.napcatStop();
+    toast("已停止");
+    renderNapcat();
+  });
+
+  $("#btn-spec-add").addEventListener("click", addSpecGroup);
+  $("#spec-gid-input").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); addSpecGroup(); } });
+  $("#btn-spec-pick").addEventListener("click", openSpecPicker);
+  $("#btn-spec-pick-close").addEventListener("click", closeSpecPicker);
+  $("#btn-spec-pick-apply").addEventListener("click", applySpecPicker);
+  $("#spec-pick-search").addEventListener("input", (e) => { _pickKeyword = e.target.value; renderSpecPickList(); });
+  $("#spec-pick-modal").addEventListener("click", (e) => { if (e.target.id === "spec-pick-modal") closeSpecPicker(); });
+  $("#timeline-group").addEventListener("change", renderTimeline);
+  $("#report-group").addEventListener("change", renderReports);
+  $("#btn-save-settings").addEventListener("click", saveSettings);
+
+  // 实时事件
+  api.on("bot:connected", () => { toast("✅ 机器人已连接"); refreshStatus(); });
+  api.on("bot:disconnected", () => { toast("❌ 连接断开"); refreshStatus(); });
+  api.on("groups:updated", () => { renderGroups(); renderOverview(); });
+  api.on("bots:updated", () => { renderGroups(); });
+  api.on("summary:done", () => { renderReports(); });
+  api.on("bot:event", (evt) => {
+    // 实时事件只更新总览（避免频繁重绘）
+    if (state.activeTab === "overview") renderOverview();
+  });
+}
+
+// ---------- 防护层：全局错误守卫 ----------
+window.addEventListener("error", (e) => {
+  console.error("[app] 未捕获错误:", e.message);
+  try { toast("界面异常：" + (e.message || "未知"), 4000); } catch {}
+});
+window.addEventListener("unhandledrejection", (e) => {
+  console.error("[app] 未处理 Promise 拒绝:", e.reason instanceof Error ? e.reason.message : String(e.reason));
+});
+
+
+// ---------- 免责声明与协议（全家桶：大事汇总器为第一入口） ----------
+const DISCLAIMER_TEXT =
+"图片识别工具全家桶（图片识别 + 大事汇总器 + NapCat）\n" +
+"安装免责声明与使用须知\n\n" +
+"【使用前必读】使用即表示您已阅读并同意以下全部内容：\n\n" +
+"1. 用途声明\n本软件仅用于个人学习、研究与日常信息整理。使用者应遵守《腾讯软件许可及服务协议》、QQ 平台规则及所在国家/地区的法律法规。\n\n" +
+"2. 账号风险\n软件需要登录一个 QQ 账号（强烈建议使用专门的小号）以读取群消息。登录后该账号可读取所监控群的全部消息，并可能触发 QQ 官方风控，存在限制登录、封号等风险。由此产生的任何后果由使用者自行承担，开发者不承担任何责任。\n\n" +
+"3. 隐私与数据\n除可选的 DeepSeek 文本总结（仅向官方 API 发送文本内容）外，本软件不在线传输任何数据：识别结果、消息记录、配置均保存在本机。使用者应对自行配置监控内容所涉及的个人信息负责，并妥善保管本机数据。\n\n" +
+"4. 第三方组件\n本软件内置 NapCat（MIT 许可）、Tesseract OCR（Apache-2.0）等第三方组件，其行为与更新不受本项目控制。\n\n" +
+"5. 无担保与免责\n本软件按\"现状\"提供，不提供任何明示或默示担保。因使用本软件造成的任何直接或间接损失（包括但不限于账号损失、数据丢失、法律纠纷），开发者概不负责。\n\n" +
+"6. 禁止用途\n禁止将本软件用于任何非法目的，包括但不限于入侵、骚扰、侵犯他人隐私、批量骚扰等。";
+
+const AGREEMENTS = [
+  { t: "免责声明", html: "<pre style=\"white-space:pre-wrap;font-family:inherit;font-size:12.5px;line-height:1.7;margin:0\">" + DISCLAIMER_TEXT + "</pre>" },
+  { t: "用户协议", html:
+    "<ol style=\"padding-left:18px\"><li>本软件按\"现状\"提供，不保证持续可用、无错误或无中断。</li>" +
+    "<li>您仅可将本软件用于合法、合规的个人用途；不得用于任何违反法律法规或 QQ 平台规则的行为。</li>" +
+    "<li>您对使用本软件的行为及后果（含登录账号）负全部责任。</li>" +
+    "<li>开发者有权随时更新、修改或停止本软件，恕不另行通知。</li>" +
+    "<li>卸载本软件即视为终止本协议；本机留存的数据由您自行处置。</li></ol>" },
+  { t: "隐私政策", html:
+    "<p><b>本地存储</b>：识别结果、消息记录、配置、机器人名单等全部保存在本机用户目录（%APPDATA%\\imgocr、%APPDATA%\\qq-sentinel），不会上传。</p>" +
+    "<p><b>网络请求</b>：仅以下场景联网——① 热点库：微博/抖音/B站公开接口；② OCR 语言模型首次下载（可选离线包）；③ DeepSeek 文本总结（仅当您主动配置 API Key 并使用时，发送识别文本到官方 API）。</p>" +
+    "<p><b>日志脱敏</b>：本地日志会自动隐藏 API Key、Token 等敏感信息。</p>" +
+    "<p><b>第三方</b>：NapCat 与 QQ 之间的通信受腾讯协议约束，相关内容请查阅腾讯官方声明。</p>" },
+  { t: "开源与第三方许可", html:
+    "<p>本软件基于以下开源项目构建，各自按对应许可发布：</p>" +
+    "<ul style=\"padding-left:18px\"><li><b>Electron</b> — MIT</li><li><b>tesseract.js / tesseract.js-core</b> — Apache-2.0</li><li><b>ws</b> — MIT</li><li><b>express</b> — MIT</li><li><b>NapCatQQ</b> — MIT</li><li><b>tessdata 语言模型（eng/chi_sim）</b> — Apache-2.0</li></ul>" +
+    "<p class=\"hint\">完整许可文本见各项目官方仓库。</p>" },
+];
+
+function renderAgreements() {
+  $("#agreements-body").innerHTML = AGREEMENTS.map((s) =>
+    "<details style=\"border:1px solid var(--border);border-radius:6px;margin-bottom:8px;padding:8px 10px\"><summary style=\"cursor:pointer;font-weight:600\">" + esc(s.t) + "</summary><div style=\"margin-top:6px;font-size:12.5px;color:#555;line-height:1.7\">" + s.html + "</div></details>"
+  ).join("");
+}
+function openAgreements() { renderAgreements(); $("#agreements-modal").classList.remove("hidden"); }
+function closeAgreements() { $("#agreements-modal").classList.add("hidden"); }
+
+async function initDisclaimer() {
+  try {
+    const r = await api.disclaimerStatus();
+    if (!r || !r.ok || r.accepted) return;
+    $("#disclaimer-body").innerHTML = "<pre style=\"white-space:pre-wrap;font-family:inherit;font-size:12.5px;line-height:1.7;margin:0\">" + esc(DISCLAIMER_TEXT) + "</pre>";
+    $("#disclaimer-modal").classList.remove("hidden");
+  } catch {}
+}
+$("#btn-agreements").addEventListener("click", openAgreements);
+$("#btn-agreements-close").addEventListener("click", closeAgreements);
+$("#btn-disclaimer-view").addEventListener("click", openAgreements);
+$("#btn-disclaimer-quit").addEventListener("click", () => { try { window.close(); } catch {} });
+$("#disclaimer-agree").addEventListener("change", () => {
+  $("#btn-disclaimer-ok").disabled = !$("#disclaimer-agree").checked;
+});
+$("#btn-disclaimer-ok").addEventListener("click", async () => {
+  const r = await api.disclaimerAccept();
+  if (r && r.ok) $("#disclaimer-modal").classList.add("hidden");
+});
+// 全家桶页
+$("#btn-family-open-imgocr").addEventListener("click", async () => {
+  const r = await api.hubOpenImgocr();
+  toast(r && r.ok ? "已打开图片识别工具" : "打开失败：" + ((r && r.error) || ""));
+});
+$("#btn-family-ping").addEventListener("click", async () => {
+  const r = await api.ocrPing();
+  $("#family-ping-hint").textContent = r && r.ok ? "✅ OCR 服务在线" + (r.tokenFound ? "" : "（未找到令牌）") : "❌ " + ((r && r.error) || "连接失败");
+});
+
+// ---------- 启动 ----------
+(async function init() {
+  try {
+    await initDisclaimer();
+    bind();
+    state.activeTab = "overview";
+    await refreshStatus();
+    await renderOverview();
+    await renderNapcat();
+  } catch (e) {
+    console.error("[app] 初始化失败:", e);
+    try { toast("初始化异常：" + (e?.message || e), 5000); } catch {}
+  }
+})();
+

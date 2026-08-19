@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'">
+<title>图片识别工具 ImgOCR</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div class="row">
+    <h1>📷 图片识别工具 <span id="version" class="muted"></span></h1>
+    <div class="spacer"></div>
+    <label class="chip"><input type="checkbox" id="lang-zh" checked> 中文</label>
+    <label class="chip"><input type="checkbox" id="lang-en" checked> English</label>
+    <button id="btn-files">导入图片</button>
+    <button id="btn-folder">导入文件夹</button>
+    <button id="btn-run" disabled>开始识别</button>
+    <button id="btn-cancel" class="danger" hidden>取消</button>
+    <button id="btn-guide">🚀 快速开始</button>
+    <button id="btn-help">📖 帮助</button>
+    <button id="btn-agreements" title="协议与许可">📄</button>
+  </div>
+  <div class="row">
+    <input id="search" type="search" placeholder="全文搜索识别结果…（回车搜索）" autocomplete="off">
+    <span id="stats" class="muted"></span>
+  </div>
+</header>
+<main>
+  <section id="queue" class="card" hidden>
+    <h2>待识别队列 <span id="queue-count" class="muted"></span></h2>
+    <div id="queue-progress" class="progressbar" hidden><div id="queue-progress-bar"></div></div>
+    <div id="queue-list"></div>
+  </section>
+  <section id="results" class="card">
+    <h2>识别结果 <span id="result-count" class="muted"></span></h2>
+    <div id="result-list"></div>
+  </section>
+  <section id="napcat-section" class="card">
+    <h2>📡 QQ 群图片来源（NapCat，只读）</h2>
+    <div class="row">
+      <input id="napcat-ws" type="text" value="ws://127.0.0.1:3001" placeholder="ws://127.0.0.1:3001" autocomplete="off">
+      <button id="btn-napcat-connect">连接并加载群列表</button>
+      <span id="napcat-status" class="muted"></span>
+    </div>
+    <div id="napcat-groups" class="groups"></div>
+    <div class="row">
+      <input id="napcat-qr" type="text" placeholder="NapCat 二维码路径（留空自动查找）" autocomplete="off">
+      <button id="btn-napcat-showqr" class="mini">立即打开二维码</button>
+    </div>
+    <div class="row">
+      <label class="chip"><input type="checkbox" id="napcat-listen"> 实时监听新图片（自动加入队列）</label>
+      <button id="btn-napcat-fetch">拉取所选群最近图片</button>
+      <button id="btn-napcat-pending" class="mini">查看待识别缓存</button>
+      <button id="btn-napcat-clear-pending" class="mini danger">清空缓存</button>
+    </div>
+  </section>
+  <section id="family-section" class="card">
+    <h2>🧰 全家桶互调</h2>
+    <div class="row">
+      <span id="bridge-status" class="muted"></span>
+      <button id="btn-open-sentinel">打开大事汇总器</button>
+    </div>
+    <p class="muted" style="font-size:12px">本工具提供本地 OCR 服务（127.0.0.1:8765），大事汇总器可调用它识别群内图片；也支持把 QQ 群图片拉进来识别。</p>
+  </section>
+  <section id="key-section" class="card" hidden>
+    <h2>DeepSeek 文本总结（可选）</h2>
+    <p class="muted">设置 API Key 后，可对识别文字做语义总结/分类。Key 仅保存在本机用户目录，请求仅通过 https 发送。</p>
+    <div class="row">
+      <input id="key-input" type="password" placeholder="sk-…" autocomplete="off">
+      <button id="btn-save-key">保存 Key</button>
+      <span id="key-status" class="muted"></span>
+    </div>
+  </section>
+</main>
+
+<!-- 首次引导弹窗 -->
+<div id="guide-modal" class="modal-mask hidden">
+  <div class="modal-box wide">
+    <div class="modal-head"><h2>🚀 欢迎使用全家桶</h2><button class="btn-ghost" id="btn-guide-close" title="关闭">✕</button></div>
+    <div class="modal-body" id="guide-body"></div>
+    <div class="modal-foot">
+      <label class="chip"><input type="checkbox" id="guide-noshow"> 下次启动不再显示</label>
+      <span class="spacer"></span>
+      <button id="btn-guide-done" class="btn primary">知道了，开始使用</button>
+    </div>
+  </div>
+</div>
+
+<!-- 帮助中心弹窗 -->
+<!-- 免责声明（首次强制） -->
+<div id="disclaimer-modal" class="modal-mask hidden">
+  <div class="modal-box wide tall">
+    <div class="modal-head"><h2>⚠️ 安装免责声明与使用须知</h2></div>
+    <div class="modal-body" id="disclaimer-body"></div>
+    <div class="modal-foot">
+      <label class="chip"><input type="checkbox" id="disclaimer-agree"> 我已阅读并同意以上全部内容</label>
+      <span class="spacer"></span>
+      <button id="btn-disclaimer-view" class="btn-ghost">📄 查看全部协议</button>
+      <button id="btn-disclaimer-quit" class="danger">不同意，退出</button>
+      <button id="btn-disclaimer-ok" class="btn primary" disabled>同意并继续</button>
+    </div>
+  </div>
+</div>
+
+<!-- 协议中心 -->
+<div id="agreements-modal" class="modal-mask hidden">
+  <div class="modal-box wide tall">
+    <div class="modal-head"><h2>📄 协议与许可</h2><button class="btn-ghost" id="btn-agreements-close" title="关闭">✕</button></div>
+    <div class="modal-body" id="agreements-body"></div>
+  </div>
+</div>
+
+<div id="help-modal" class="modal-mask hidden">
+  <div class="modal-box wide tall">
+    <div class="modal-head"><h2>📖 帮助中心</h2><button class="btn-ghost" id="btn-help-close" title="关闭">✕</button></div>
+    <div class="modal-body" id="help-body"></div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

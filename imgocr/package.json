@@ -1,0 +1,81 @@
+{
+  "name": "imgocr",
+  "version": "0.2.0",
+  "private": true,
+  "description": "本地图片文字识别工具 (OCR) — tesseract.js 纯本地识别，只读图片源，结果本地 JSONL 存档，可选 DeepSeek 文本总结",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "tessdata:fetch": "node scripts/fetch-tessdata.js",
+    "smoke": "node scripts/smoke.js"
+  },
+  "dependencies": {
+    "tesseract.js": "^7.0.0",
+    "ws": "^8.21.3"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^26.15.3"
+  },
+  "allowScripts": {
+    "electron": true,
+    "tesseract.js": true
+  },
+  "author": "imgocr",
+  "build": {
+    "appId": "com.imgocr.app",
+    "productName": "ImgOCR",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "core/**",
+      "renderer/**",
+      "package.json",
+      "resources/icon.png"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/tessdata",
+        "to": "tessdata"
+      },
+      {
+        "from": "bundle-qq-sentinel/app",
+        "to": "qq-sentinel/app"
+      },
+      {
+        "from": "bundle-qq-sentinel/napcat",
+        "to": "qq-sentinel/napcat"
+      },
+      {
+        "from": "bundle-electron",
+        "to": "electron"
+      }
+    ],
+    "asarUnpack": [
+      "node_modules/tesseract.js-core/**",
+      "node_modules/tesseract.js/**"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "resources/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "大事汇总器全家桶",
+      "license": "docs/免责声明.txt"
+    },
+    "afterPack": "scripts/after-pack.js"
+  }
+}

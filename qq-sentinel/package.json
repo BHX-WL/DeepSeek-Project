@@ -1,0 +1,17 @@
+{
+  "name": "qq-sentinel",
+  "version": "1.0.0",
+  "description": "QQ 群大事监控器：采集群消息/公告/@全体，DeepSeek 自动汇总大事与吵架",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-packager . qq-sentinel --platform=win32 --arch=x64 --out=dist --overwrite"
+  },
+  "devDependencies": {
+    "electron": "^43.4.0",
+    "electron-packager": "^17.1.2"
+  },
+  "dependencies": {
+    "ws": "^8.21.3"
+  }
+}
