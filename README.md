@@ -56,10 +56,15 @@ npm start
 打包全家桶安装包（Windows）：
 
 ```bash
-cd imgocr
-# 先构建 qq-sentinel 到 dist\qq-sentinel-win32-x64，再：
-npx electron-builder --win nsis
+cd qq-sentinel
+npm run build                    # ① qq-sentinel 打包到 dist\qq-sentinel-win32-x64（含内置语义模型 models/）
+robocopy dist\qq-sentinel-win32-x64\resources\app ..\imgocr\bundle-qq-sentinel\app /E   # ② 同步组装源（覆盖旧 app）
+cd ..\imgocr
+npx electron-builder --win nsis  # ③ 全家桶安装包（after-pack 会校验语义模型在包内，缺失则终止）
 ```
+
+> 模型分发闭环：内置语义模型约 129MB 随包内置、不入 git（qq-sentinel/models/ 已 ignore）。安装包构建时若缺模型会直接报错，不会静默发出降级版。
+> 干净验收：可用环境变量 `QQS_USER_DATA=<空目录>` 让 qq-sentinel 把配置/存储/日志放到指定目录（多开/首次运行验收用）。
 
 ## 免责声明
 

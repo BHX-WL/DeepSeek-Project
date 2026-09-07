@@ -50,6 +50,14 @@ process.on("unhandledRejection", (reason) => {
 // ====================================================
 
 function userDataDir() {
+  // QQS_USER_DATA：数据目录覆盖（便携/多开/干净验收）。设置后配置/存储/日志都放 <env>/data。
+  const envData = process.env.QQS_USER_DATA;
+  if (envData && String(envData).trim()) {
+    try { app.setPath("userData", String(envData).trim()); } catch (e) {}
+    const dir = path.join(String(envData).trim(), "data");
+    fs.mkdirSync(dir, { recursive: true });
+    return dir;
+  }
   const dir = path.join(app.getPath("userData"), "data");
   fs.mkdirSync(dir, { recursive: true });
   return dir;
