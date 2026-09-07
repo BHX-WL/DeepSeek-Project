@@ -63,7 +63,7 @@ function prepareRows(rows, opts = {}) {
     const t = cleanText(r.text);
     if (t.length < 2) continue;
     freq.set(t, (freq.get(t) || 0) + 1);
-    items.push({ text: t, time: r.time || "", nickname: r.nickname || r.userId || "" });
+    items.push({ text: t, time: r.time || "", nickname: r.nickname || r.userId || "", hotHits: Array.isArray(r.hotHits) ? r.hotHits : [] });
   }
   const template = new Set([...freq.entries()].filter(([, c]) => c >= templateMin).map(([t]) => t));
   const real = items.filter((r) => !template.has(r.text));
@@ -156,6 +156,17 @@ async function semanticSummarize(rows, opts = {}) {
       if (!parts.length) continue;
       clusters += Math.min(parts.length, 3);
       if (win.day) lines.push("【" + String(win.day).slice(5) + "】");
+      // 关联热搜（collector 对消息打的 hotHits 聚合，去重 top2）
+      const hotTitles = [];
+      for (const r of sample) {
+        for (const h of r.hotHits || []) {
+          const t = String(h && h.title || "").trim().slice(0, 40);
+          if (t && !hotTitles.includes(t)) hotTitles.push(t);
+          if (hotTitles.length >= 2) break;
+        }
+        if (hotTitles.length >= 2) break;
+      }
+      if (hotTitles.length) lines.push("   🔥 关联热搜：疑似在聊 " + hotTitles.join(" / "));
       for (const p of parts.slice(0, 3)) {
         const span = p.from && p.to && p.from !== p.to
           ? "（" + String(p.from).slice(11, 16) + "~" + String(p.to).slice(11, 16) + "）"
