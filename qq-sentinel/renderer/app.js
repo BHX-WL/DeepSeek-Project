@@ -29,10 +29,16 @@ function groupName(gid) {
   return g ? g.name : `群${gid}`;
 }
 
+const ENGINE_LABEL = { deepseek: "DeepSeek", ollama: "Ollama", semantic: "本地语义", local: "本地统计" };
+function engineBadge(engine) {
+  if (!engine || !ENGINE_LABEL[engine]) return "";
+  return '<span class="engine-badge" title="总结引擎">' + esc(engine ? ENGINE_LABEL[engine] : "") + "</span>";
+}
+
 const KIND_LABEL = {
   at_all: "全体", announcement: "公告", recall: "撤回", admin_change: "管理",
   member_left: "退群", member_joined: "进群", conflict: "冲突", at_me: "提到我",
-  daily: "汇总", summary: "汇总", group_notice: "通知", group_essence: "精华", group_poke: "戳一戳",
+  daily: "汇总", summary: "汇总", group_notice: "通知", group_essence: "精华", group_poke: "戳一戳", keyword: "关键词",
 };
 
 // ---------- 事件渲染 ----------
@@ -47,7 +53,7 @@ function renderEvent(evt) {
   return `<div class="event-item ${esc(kind)}">
     <div class="event-head">
       <span class="event-title"><span class="event-tag">${esc(tag)}</span>${esc(evt.title || "")}</span>
-      <span class="event-time">${fmtTime(evt.time || evt.createdAt)}</span>
+      <span class="event-time">${fmtTime(evt.time || evt.createdAt)}${engineBadge(evt.engine)}</span>
     </div>
     ${body ? `<div class="event-body">${esc(body)}</div>` : ""}
   </div>`;
@@ -112,7 +118,7 @@ async function renderSpecGroups() {
   const hint = $("#spec-hint");
   if (!box) return;
   if (list.length === 0) {
-    box.innerHTML = '<span class="spec-hint">未指定 → 当前采集全部群</span>';
+    box.innerHTML = '<span class="spec-hint">未指定 → 当前采集全部群（要只采部分：关掉不采的群，或点「从群列表选择」）</span>';
     if (hint) hint.textContent = "提示：指定群后，只有这些群的消息会被采集/汇总，其他群一律不处理。";
     return;
   }
@@ -258,18 +264,32 @@ async function renderGroups() {
   `).join("");
   $$("#groups-list .switch input").forEach((input) => {
     input.addEventListener("change", async () => {
-      const gid = input.dataset.gid;
+      const gid = String(input.dataset.gid || "");
       try {
-        const cur = await getSpecGroups();
+        const cur = await getSpecGroups(); // [] = 采集全部
         const w = await api.configGet("watch") || {};
         if (input.checked) {
-          if (!cur.includes(gid)) await api.configSet("watch", { ...w, groups: [...cur, gid] });
-          toast("已指定群 " + gid + "（开始采集）");
+          // 开：把该群加入白名单
+          const next = cur.includes(gid) ? cur : [...cur, gid];
+          await api.configSet("watch", { ...w, groups: next });
+          toast(cur.length === 0 ? "已只采集群 " + gid + "（其余群停止）" : "已指定群 " + gid + "（开始采集）");
         } else {
-          await api.configSet("watch", { ...w, groups: cur.filter((g) => g !== gid) });
-          toast("已移出群 " + gid + "（不再采集）");
+          // 关：必须显式落白名单（空=全部，不能靠"移除"表达"排除一个"）
+          const allIds = (state.groups || []).map((g) => String(g.groupId));
+          const base = cur.length ? cur : allIds;          // 空=全部 → 以可见全部群为基线
+          const next = base.filter((x) => x !== gid);
+          if (next.length === 0) {
+            // 排除最后一个群会退回"全部"语义 → 与用户意图相反，阻止并说明
+            input.checked = true; // 还原开关
+            toast("不能取消最后一个群：清空指定=采集全部。请改用「从群列表选择」明确要采集的群");
+            renderGroups();
+            return;
+          }
+          await api.configSet("watch", { ...w, groups: next });
+          toast("已停止采集群 " + gid + "（其余 " + next.length + " 个群继续）");
         }
         renderSpecGroups();
+        renderGroups(); // 刷新各开关状态，避免"看似全选"的错觉
       } catch (e) {
         toast("设置失败：" + (e?.message || e));
       }
@@ -352,9 +372,18 @@ async function loadSettings() {
   const s = await api.configGet("summarize");
   const h = await api.configGet("hotspots");
   const o = await api.configGet("ocr");
+  const nt = await api.configGet("notify");
+  const llm = await api.configGet("ollama");
+  const sm = await api.configGet("summarize");
   $("#set-ds-key").value = d.apiKey || "";
   $("#set-ds-model").value = d.model || "";
   $("#set-ds-base").value = d.baseUrl || "";
+  if (sm) $("#set-summary-mode").value = sm.mode || "auto";
+  if (llm) {
+    $("#set-ollama-enabled").checked = llm.enabled !== false;
+    $("#set-ollama-url").value = llm.url || "http://127.0.0.1:11434";
+    $("#set-ollama-model").value = llm.model || "qwen2.5:7b";
+  }
   $("#set-mode").value = n.mode || "forward";
   $("#set-ws-url").value = n.wsUrl || "";
   $("#set-reverse-port").value = n.reversePort || 3002;
@@ -373,6 +402,14 @@ async function loadSettings() {
   $("#set-hotspots-cache").value = h.cacheMinutes ?? 15;
   $("#set-ocr-url").value = (o && o.bridgeUrl) || "http://127.0.0.1:8765";
   $("#set-ocr-token").value = (o && o.bridgeToken) || "";
+  if (nt) {
+    $("#set-notify-enabled").checked = nt.enabled !== false;
+    $("#set-notify-atall").checked = nt.atAll !== false;
+    $("#set-notify-ann").checked = nt.announcement !== false;
+    $("#set-notify-conflict").checked = nt.conflict !== false;
+    $("#set-notify-daily").checked = nt.daily !== false;
+    $("#set-notify-focus").checked = nt.focusSilent !== false;
+  }
   const hp = h.platforms || ["weibo", "douyin", "bilibili"];
   $("#set-hot-weibo").checked = hp.includes("weibo");
   $("#set-hot-douyin").checked = hp.includes("douyin");
@@ -413,6 +450,7 @@ async function saveSettings() {
   await api.configSet("summarize", {
     dailyHour: parseInt($("#set-daily-hour").value, 10) || 22,
     defaultDays: parseInt($("#set-default-days").value, 10) || 7,
+    mode: $("#set-summary-mode").value,
     includeConflicts: $("#set-conflicts").checked,
     conflictWindowMin: parseInt($("#set-conflict-win").value, 10) || 10,
     conflictMessageMin: parseInt($("#set-conflict-min").value, 10) || 8,
@@ -429,6 +467,19 @@ async function saveSettings() {
       const el = { weibo: $("#set-hot-weibo"), douyin: $("#set-hot-douyin"), bilibili: $("#set-hot-bilibili") }[p];
       return el && el.checked;
     }),
+  });
+  await api.configSet("notify", {
+    enabled: $("#set-notify-enabled").checked,
+    atAll: $("#set-notify-atall").checked,
+    announcement: $("#set-notify-ann").checked,
+    conflict: $("#set-notify-conflict").checked,
+    daily: $("#set-notify-daily").checked,
+    focusSilent: $("#set-notify-focus").checked,
+  });
+  await api.configSet("ollama", {
+    enabled: $("#set-ollama-enabled").checked,
+    url: $("#set-ollama-url").value.trim() || "http://127.0.0.1:11434",
+    model: $("#set-ollama-model").value.trim() || "qwen2.5:7b",
   });
   const hint = $("#settings-saved");
   hint.textContent = "✓ 已保存";
@@ -464,7 +515,7 @@ function switchTab(tab) {
   if (tab === "overview") renderOverview();
   if (tab === "groups") { renderSpecGroups(); renderGroups(); }
   if (tab === "timeline") renderTimeline();
-  if (tab === "reports") { initReportPeriod(); renderReports(); }
+  if (tab === "reports") { initReportPeriod(); renderReports(); renderKwBar(); }
   if (tab === "napcat") renderNapcat();
   if (tab === "settings") loadSettings();
 }
@@ -648,9 +699,100 @@ $("#btn-napcat-stop").addEventListener("click", async () => {
   $("#report-group").addEventListener("change", renderReports);
   $("#btn-save-settings").addEventListener("click", saveSettings);
 
+  // 导出报告（.md / .json）
+  async function doExport(format) {
+    const gid = $("#report-group").value;
+    if (!gid) { toast("请先选择群"); return; }
+    const since = $("#summary-since").value ? dtLocalToISO($("#summary-since").value) : undefined;
+    const until = $("#summary-until").value ? dtLocalToISO($("#summary-until").value) : undefined;
+    const hint = $("#export-hint");
+    if (hint) { hint.textContent = "导出中…"; hint.classList.add("show"); }
+    const r = await api.reportExport({ gid, format, since, until });
+    if (hint) setTimeout(() => { hint.textContent = ""; hint.classList.remove("show"); }, 2500);
+    if (r && r.ok) toast("✅ 已导出：" + r.path, 5000);
+    else if (r && r.canceled) toast("已取消导出");
+    else toast("❌ 导出失败：" + ((r && r.error) || "未知错误"), 4000);
+  }
+  $("#btn-export-md").addEventListener("click", () => doExport("md"));
+  $("#btn-export-json").addEventListener("click", () => doExport("json"));
+
+  // 关键词命中记录模态框
+  async function openKwHits() {
+    const gid = $("#timeline-group").value;
+    if (!gid) { toast("请先在时间线选择群"); return; }
+    const box = $("#kw-hits-list");
+    const hint = $("#kw-hits-hint");
+    if (box) box.innerHTML = '<div class="empty">加载中…</div>';
+    if (hint) hint.textContent = "";
+    const hits = await api.kwHitsList(gid, 500);
+    const list = Array.isArray(hits) ? hits : [];
+    $("#kw-hits-modal").classList.remove("hidden");
+    if (!list.length) {
+      if (box) box.innerHTML = '<div class="empty">该群暂无关键词命中记录（先在设置页添加关键词）</div>';
+      return;
+    }
+    if (box) box.innerHTML = list.map((h) => `
+      <div class="event-item kw-hit">
+        <div class="event-head">
+          <span class="event-title"><span class="event-tag">关键词</span>🔑 ${esc((h.words || []).join("、"))}</span>
+          <span class="event-time">${fmtTime(h.time || h.savedAt)}</span>
+        </div>
+        <div class="event-body">${esc((h.nickname ? h.nickname + "：" : "") + (h.text || ""))}</div>
+      </div>`).join("");
+    if (hint) hint.textContent = "共 " + list.length + " 条（最近 " + list.length + " 条）";
+  }
+  function closeKwHits() { $("#kw-hits-modal").classList.add("hidden"); }
+  $("#btn-kw-hits").addEventListener("click", openKwHits);
+
+  // 报告页：监控词管理条
+  async function getKwList() {
+    const w = await api.configGet("watch");
+    return Array.isArray(w && w.keywords) ? w.keywords.filter(Boolean).map(String) : [];
+  }
+  async function renderKwBar() {
+    const chips = $("#kw-chips");
+    if (!chips) return;
+    const list = await getKwList();
+    if (!list.length) { chips.innerHTML = '<span class="spec-hint">未设置 → 先在上方输入监控词并点“添加”</span>'; return; }
+    chips.innerHTML = list.map((k) =>
+      '<span class="spec-chip">🔑 ' + esc(k) + ' <span class="del" data-del="' + esc(k) + '" title="移除监控词">✕</span></span>'
+    ).join("");
+    chips.querySelectorAll(".del").forEach((d) => d.addEventListener("click", async () => {
+      const kw = d.dataset.del;
+      const w = await api.configGet("watch") || {};
+      await api.configSet("watch", { ...w, keywords: (Array.isArray(w.keywords) ? w.keywords : []).filter((x) => String(x) !== kw) });
+      toast("已移除监控词：" + kw);
+      renderKwBar();
+    }));
+  }
+  async function addKwWord() {
+    const input = $("#kw-add-input");
+    const word = (input.value || "").trim();
+    if (!word) { toast("请输入关键词"); return; }
+    const w = await api.configGet("watch") || {};
+    const cur = Array.isArray(w.keywords) ? w.keywords.map(String) : [];
+    if (cur.some((x) => x.toLowerCase() === word.toLowerCase())) { toast("该词已在监控列表"); return; }
+    await api.configSet("watch", { ...w, keywords: [...cur, word] });
+    input.value = "";
+    toast("已添加监控词：" + word + "（命中即重点记录）");
+    renderKwBar();
+  }
+  $("#btn-kw-add").addEventListener("click", addKwWord);
+  $("#kw-add-input").addEventListener("keydown", (ev) => { if (ev.key === "Enter") addKwWord(); });
+
+  $("#btn-kw-hits-close").addEventListener("click", closeKwHits);
+
+
+
   // 实时事件
   api.on("bot:connected", () => { toast("✅ 机器人已连接"); refreshStatus(); });
-  api.on("bot:disconnected", () => { toast("❌ 连接断开"); refreshStatus(); });
+  api.on("bot:disconnected", () => { toast("❌ 连接断开（将自动重连）"); refreshStatus(); });
+  api.on("bot:reconnecting", (p) => {
+    const n = p?.attempt || 1;
+    const el = $("#conn-status");
+    if (el) { el.textContent = `重连中…(第${n}次)`; el.classList.remove("on"); }
+    if (n === 1 || n % 5 === 0) toast(`⚠️ 正在自动重连（第${n}次）…`, 3000);
+  });
   api.on("groups:updated", () => { renderGroups(); renderOverview(); });
   api.on("bots:updated", () => { renderGroups(); });
   api.on("summary:done", () => { renderReports(); });
@@ -671,7 +813,34 @@ window.addEventListener("unhandledrejection", (e) => {
 
 
 // ---------- 更新日志 ----------
-const CHANGELOG_TEXT = "v0.2.0（2026-08-19）全家桶发布\n🆕 全家桶整合：大事汇总器 + 图片识别 + NapCat 一个安装包，互相调用\n🆕 免责声明：安装前 + 首次强制确认；协议中心（免责/用户协议/隐私/开源许可）\n🆕 二维码登录：自动弹 Windows Photos + 风险警告（用小号）+ 登录后自动关闭\n🆕 机器人检测：自动标注 is_robot 成员并忽略其刷屏\n🆕 本地统计汇总：无 DeepSeek 自动降级（统计+关键词+活跃成员）\n🆕 OCR 互调桥：大事汇总器识别群图 → 图片识别本地 OCR（令牌鉴权）\n🆕 后台运行：图片识别隐藏驻留托盘，自动拉起大事汇总器（第一眼）\n🆕 首次引导 + 帮助中心 + 一键安装脚本\n🔒 安全加固：IPC 发送方校验 / 路径白名单 / XSS 转义 / 日志脱敏\n✅ 修复：启动崩溃（safeHandle 递归）、控制台窗口、撤回忽略、打包 NapCat 依赖\n\nv0.1.0（2026-08）图片识别工具\n本地 OCR（离线中英文）、JSONL 存档 + 全文搜索、NapCat 群图拉取、DeepSeek 总结（可选）";
+const CHANGELOG_TEXT = `v0.4.0（2026-09）本地语义总结 + 关键词监控
+🆕 本地语义总结：无 Key/无 Ollama 时用内置轻量模型（约129MB）做语义聚类要点总结，全离线免费；引擎显示“本地语义”
+🆕 关键词监控：报告页设置监控词，命中→时间线重点事件+逐条存档；每份报告自带“关键词命中”统计
+🆕 汇总报告按日分窗、复读提示、引擎标识
+
+v0.3.0（2026-09）整理完善
+🆕 测试体系：node:test 单元测试 53 项 + npm test（config 加固/只读护栏/存储/机器人/重连/Ollama/导出）
+🆕 配置加固：schema 校验与越界钳制、外部修改热读 reload()、保存前 .bak 备份、合并防原型污染
+🆕 连接韧性：断线自动重连（指数退避+抖动，界面显示第 n 次重连）
+🆕 系统通知：@全体/公告/冲突/每日汇总 系统托盘通知，可开关、窗口聚焦免打扰
+🆕 本地 AI：Ollama 支持（无 DeepSeek Key 也能 AI 汇总/判冲突，引擎可选 auto/deepseek/ollama/local）
+🆕 报告导出：Markdown / JSON 导出当前群时段大事与消息样本
+🔧 构建：引入 electron-builder 配置（npm run dist），保留 electron-packager 兼容全家桶流程
+
+v0.2.0（2026-08-19）全家桶发布
+🆕 全家桶整合：大事汇总器 + 图片识别 + NapCat 一个安装包，互相调用
+🆕 免责声明：安装前 + 首次强制确认；协议中心（免责/用户协议/隐私/开源许可）
+🆕 二维码登录：自动弹 Windows Photos + 风险警告（用小号）+ 登录后自动关闭
+🆕 机器人检测：自动标注 is_robot 成员并忽略其刷屏
+🆕 本地统计汇总：无 DeepSeek 自动降级（统计+关键词+活跃成员）
+🆕 OCR 互调桥：大事汇总器识别群图 → 图片识别本地 OCR（令牌鉴权）
+🆕 后台运行：图片识别隐藏驻留托盘，自动拉起大事汇总器（第一眼）
+🆕 首次引导 + 帮助中心 + 一键安装脚本
+🔒 安全加固：IPC 发送方校验 / 路径白名单 / XSS 转义 / 日志脱敏
+✅ 修复：启动崩溃（safeHandle 递归）、控制台窗口、撤回忽略、打包 NapCat 依赖
+
+v0.1.0（2026-08）图片识别工具
+本地 OCR（离线中英文）、JSONL 存档 + 全文搜索、NapCat 群图拉取、DeepSeek 总结（可选）`;
 $("#btn-changelog").addEventListener("click", () => { $("#changelog-body").textContent = CHANGELOG_TEXT; $("#changelog-modal").classList.remove("hidden"); });
 $("#btn-changelog-close").addEventListener("click", () => { $("#changelog-modal").classList.add("hidden"); });
 
@@ -682,27 +851,27 @@ const DISCLAIMER_TEXT =
 "【使用前必读】使用即表示您已阅读并同意以下全部内容：\n\n" +
 "1. 用途声明\n本软件仅用于个人学习、研究与日常信息整理。使用者应遵守《腾讯软件许可及服务协议》、QQ 平台规则及所在国家/地区的法律法规。\n\n" +
 "2. 账号风险\n软件需要登录一个 QQ 账号（强烈建议使用专门的小号）以读取群消息。登录后该账号可读取所监控群的全部消息，并可能触发 QQ 官方风控，存在限制登录、封号等风险。由此产生的任何后果由使用者自行承担，开发者不承担任何责任。\n\n" +
-"3. 隐私与数据\n除可选的 DeepSeek 文本总结（仅向官方 API 发送文本内容）外，本软件不在线传输任何数据：识别结果、消息记录、配置均保存在本机。使用者应对自行配置监控内容所涉及的个人信息负责，并妥善保管本机数据。\n\n" +
-"4. 第三方组件\n本软件内置 NapCat（MIT 许可）、Tesseract OCR（Apache-2.0）等第三方组件，其行为与更新不受本项目控制。\n\n" +
-"5. 无担保与免责\n本软件按\"现状\"提供，不提供任何明示或默示担保。因使用本软件造成的任何直接或间接损失（包括但不限于账号损失、数据丢失、法律纠纷），开发者概不负责。\n\n" +
+"3. 隐私与数据\n消息采集与总结默认完全在本机进行：消息记录、事件、关键词命中、配置与机器人名单均保存在本机用户目录。联网仅发生在以下可选场景——① 热点库：拉取微博/抖音/B站公开热榜作为汇总背景；② AI 总结：仅当您主动配置 DeepSeek API Key 或本机运行 Ollama 时，才会把文本发送到对应服务；③ 内置“本地语义总结”使用随包离线模型，不联网、不上传任何消息。使用者应对自行配置监控内容所涉及的个人信息负责，并妥善保管本机数据。\n\n" +
+"4. 第三方组件\n本软件内置 NapCat（MIT）、Tesseract OCR（Apache-2.0）、@xenova/transformers 与内置语义模型（Apache-2.0）等第三方组件，其行为与更新不受本项目控制。\n\n" +
+"5. 无担保与免责\n本软件按“现状”提供，不提供任何明示或默示担保。因使用本软件造成的任何直接或间接损失（包括但不限于账号损失、数据丢失、法律纠纷），开发者概不负责。\n\n" +
 "6. 禁止用途\n禁止将本软件用于任何非法目的，包括但不限于入侵、骚扰、侵犯他人隐私、批量骚扰等。";
 
 const AGREEMENTS = [
   { t: "免责声明", html: "<pre style=\"white-space:pre-wrap;font-family:inherit;font-size:12.5px;line-height:1.7;margin:0\">" + DISCLAIMER_TEXT + "</pre>" },
   { t: "用户协议", html:
-    "<ol style=\"padding-left:18px\"><li>本软件按\"现状\"提供，不保证持续可用、无错误或无中断。</li>" +
+    "<ol style=\"padding-left:18px\"><li>本软件按“现状”提供，不保证持续可用、无错误或无中断。</li>" +
     "<li>您仅可将本软件用于合法、合规的个人用途；不得用于任何违反法律法规或 QQ 平台规则的行为。</li>" +
     "<li>您对使用本软件的行为及后果（含登录账号）负全部责任。</li>" +
     "<li>开发者有权随时更新、修改或停止本软件，恕不另行通知。</li>" +
     "<li>卸载本软件即视为终止本协议；本机留存的数据由您自行处置。</li></ol>" },
   { t: "隐私政策", html:
-    "<p><b>本地存储</b>：识别结果、消息记录、配置、机器人名单等全部保存在本机用户目录（%APPDATA%\\imgocr、%APPDATA%\\qq-sentinel），不会上传。</p>" +
-    "<p><b>网络请求</b>：仅以下场景联网——① 热点库：微博/抖音/B站公开接口；② OCR 语言模型首次下载（可选离线包）；③ DeepSeek 文本总结（仅当您主动配置 API Key 并使用时，发送识别文本到官方 API）。</p>" +
+    "<p><b>本地存储</b>：识别结果、消息记录、大事事件、关键词命中记录、配置、机器人名单等全部保存在本机用户目录（%APPDATA%\\qq-sentinel 等），不会上传。</p>" +
+    "<p><b>联网场景（默认关闭/可选）</b>：① 热点库：拉取微博/抖音/B站公开热榜用于汇总背景（可在设置关闭）；② DeepSeek API 总结：仅当您配置 Key 时发送文本；③ 本机 Ollama：仅当您配置本机地址时发送文本；④ 内置“本地语义总结”随包离线运行，不联网。</p>" +
     "<p><b>日志脱敏</b>：本地日志会自动隐藏 API Key、Token 等敏感信息。</p>" +
     "<p><b>第三方</b>：NapCat 与 QQ 之间的通信受腾讯协议约束，相关内容请查阅腾讯官方声明。</p>" },
   { t: "开源与第三方许可", html:
     "<p>本软件基于以下开源项目构建，各自按对应许可发布：</p>" +
-    "<ul style=\"padding-left:18px\"><li><b>Electron</b> — MIT</li><li><b>tesseract.js / tesseract.js-core</b> — Apache-2.0</li><li><b>ws</b> — MIT</li><li><b>express</b> — MIT</li><li><b>NapCatQQ</b> — MIT</li><li><b>tessdata 语言模型（eng/chi_sim）</b> — Apache-2.0</li></ul>" +
+    "<ul style=\"padding-left:18px\"><li><b>Electron</b> — MIT</li><li><b>tesseract.js / tesseract.js-core</b> — Apache-2.0</li><li><b>ws</b> — MIT</li><li><b>express</b> — MIT</li><li><b>NapCatQQ</b> — MIT</li><li><b>@xenova/transformers（本地语义引擎）</b> — Apache-2.0</li><li><b>paraphrase-multilingual-MiniLM-L12-v2（内置语义模型）</b> — Apache-2.0</li><li><b>tessdata 语言模型（eng/chi_sim）</b> — Apache-2.0</li></ul>" +
     "<p class=\"hint\">完整许可文本见各项目官方仓库。</p>" },
 ];
 
@@ -714,10 +883,38 @@ function renderAgreements() {
 function openAgreements() { renderAgreements(); $("#agreements-modal").classList.remove("hidden"); }
 function closeAgreements() { $("#agreements-modal").classList.add("hidden"); }
 
+// ---------- 快速上手（首次同意免责后出现一次；帮助中心可再次打开） ----------
+const ONBOARD_HTML = [
+  "<p style=\"margin:0 0 8px\"><b>1️⃣ 连接与选群</b></p><ul style=\"margin:0 0 12px;padding-left:18px\">" +
+  "<li>NapCat 页启动小号并登录；</li>" +
+  "<li>在「群列表」勾选要监控的群（勾选=加入指定采集）。</li></ul>",
+  "<p style=\"margin:0 0 8px\"><b>2️⃣ 设置关键词（可选）</b></p><ul style=\"margin:0 0 12px;padding-left:18px\">" +
+  "<li>在「汇总报告」顶部添加监控词；命中后进时间线并逐条存档，报告自带命中统计。</li></ul>",
+  "<p style=\"margin:0 0 8px\"><b>3️⃣ 生成汇总</b></p><ul style=\"margin:0 0 12px;padding-left:18px\">" +
+  "<li>「汇总报告」点默认汇总（一周）或选自定义时段；</li>" +
+  "<li>无 Key 也会用内置模型做本地语义总结（离线免费）；填 DeepSeek Key 或本机 Ollama 可获得云端/更强总结。</li></ul>",
+  "<p style=\"margin:0 0 8px\"><b>4️⃣ 导出与提醒</b></p><ul style=\"margin:0 0 12px;padding-left:18px\">" +
+  "<li>报告可导出 Markdown/JSON；设置页可开系统通知（@全体/公告/冲突/每日汇总）。</li></ul>",
+  "<p style=\"color:var(--muted);font-size:12px\">设置 → 汇总引擎与本地 AI 可切换 DeepSeek / Ollama / 本地语义 / 本地统计。</p>"
+].join("");
+function maybeOnboard() {
+  try {
+    if (localStorage.getItem("qqs-onboard-v1")) return;
+    $("#onboard-body").innerHTML = ONBOARD_HTML;
+    $("#onboard-modal").classList.remove("hidden");
+  } catch {}
+}
+function closeOnboard() {
+  try { localStorage.setItem("qqs-onboard-v1", "1"); } catch {}
+  $("#onboard-modal").classList.add("hidden");
+}
+$("#btn-onboard-ok").addEventListener("click", closeOnboard);
+$("#btn-onboard-close").addEventListener("click", closeOnboard);
+
 async function initDisclaimer() {
   try {
     const r = await api.disclaimerStatus();
-    if (!r || !r.ok || r.accepted) return;
+    if (!r || !r.ok || r.accepted) { maybeOnboard(); return; }
     $("#disclaimer-body").innerHTML = "<pre style=\"white-space:pre-wrap;font-family:inherit;font-size:12.5px;line-height:1.7;margin:0\">" + esc(DISCLAIMER_TEXT) + "</pre>";
     $("#disclaimer-modal").classList.remove("hidden");
   } catch {}
@@ -731,7 +928,7 @@ $("#disclaimer-agree").addEventListener("change", () => {
 });
 $("#btn-disclaimer-ok").addEventListener("click", async () => {
   const r = await api.disclaimerAccept();
-  if (r && r.ok) $("#disclaimer-modal").classList.add("hidden");
+  if (r && r.ok) { $("#disclaimer-modal").classList.add("hidden"); maybeOnboard(); }
 });
 // 全家桶页
 $("#btn-family-open-imgocr").addEventListener("click", async () => {

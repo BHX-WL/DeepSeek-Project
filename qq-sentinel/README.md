@@ -6,7 +6,7 @@
 
 - **群列表**：自动发现并展示所有群，可单独开关关注
 - **大事时间线**：@全体、新公告、撤回、管理变动、进退群、冲突等事件实时记录
-- **每日汇总**：DeepSeek 按天总结群内真正重要的事（公告/通知/决定/矛盾），忽略闲聊
+- **每日汇总**：DeepSeek 按天总结群内真正重要的事（公告/通知/决定/矛盾），忽略闲聊；无 DeepSeek Key / Ollama 时自动用内置轻量模型做本地语义聚类总结（离线免费），仍无模型则降级本地统计版
 - **吵架识别**：规则初筛（冲突词+消息密度）→ LLM 精判，标记冲突等级与参与人
 - **历史回拉**：连接后自动拉取最近 N 天消息（默认 3 天）
 - **NapCat 管理**：内置下载安装/启动/停止 NapCat
@@ -23,6 +23,20 @@
    - **正向 WS**：NapCat 开启 OneBot 11 正向 WebSocket（默认端口 3001），应用直接连接
 4. 填写 DeepSeek API Key（设置页，或环境变量 `DEEPSEEK_API_KEY`）
 5. `npm start` 启动，点「连接」
+
+## 测试
+
+```bash
+npm test          # 单元测试（node:test，53 项：config/logger/onebot/store/bots/ollama/export）
+npm run test:integration  # 集成脚本（只读护栏 / 指定群 / 全链路 mock）
+```
+
+## 构建
+
+```bash
+npm run build          # electron-packager → dist/qq-sentinel-win32-x64（全家桶打包流程沿用）
+npm run dist           # electron-builder → dist-eb/win-unpacked（electron-builder 26；当前机器受 npm.ps1 × Windows PowerShell 5.1 兼容问题限制，建议在 pwsh 7 / CI 环境执行）
+```
 
 ## 开发
 
@@ -56,6 +70,7 @@ renderer/          UI（总览/群列表/时间线/报告/NapCat/设置）
 
 - NapCat 走非官方协议，**强烈建议使用不常用的小号**，有封号风险
 - 机器人需在目标群内才能收到消息
+- 内置语义总结模型约 129MB（随安装包分发，开箱即用）；关键词命中与汇总报告联动详见报告页
 
 
 ## ⚠️ 只读承诺（重要）

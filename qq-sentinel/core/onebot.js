@@ -36,6 +36,8 @@ class OneBotClient {
     this._reconnectTimer = null;
     this._retryDelay = 3000;
     this._stopped = false;
+    this.reconnectAttempts = 0;
+    this._connecting = false;
     this._seq = 0;
     this._pending = new Map();       // echo -> {resolve,reject,method}
   }
@@ -50,6 +52,8 @@ class OneBotClient {
 
   connect() {
     if (this._stopped) return;
+    if (this._connecting || this.connected) return; // 防重入：正在连接/已连通时不重复建连
+    this._connecting = true;
     const WS = this._loadWS();
     if (!WS) { L.error("[onebot] no WebSocket available in this env"); return; }
     L.info(`[onebot] connecting ${this.wsUrl}`);
@@ -57,6 +61,7 @@ class OneBotClient {
     try {
       ws = new WS(this.wsUrl, { headers: this.token ? { Authorization: `Bearer ${this.token}` } : {} });
     } catch (e) {
+      this._connecting = false;
       L.error("[onebot] ws create error:", e.message);
       this._scheduleReconnect();
       return;
@@ -64,6 +69,8 @@ class OneBotClient {
     this.ws = ws;
     ws.on("open", () => {
       this.connected = true;
+      this._connecting = false;
+      this.reconnectAttempts = 0;
       this._retryDelay = 3000;
       L.info("[onebot] ws open");
       this.emit({ type: "meta", subType: "connected" });
@@ -96,6 +103,7 @@ class OneBotClient {
     });
     ws.on("close", () => {
       this.connected = false;
+      this._connecting = false;
       L.warn("[onebot] ws closed");
       this.emit({ type: "meta", subType: "disconnected" });
       this._scheduleReconnect();
@@ -104,11 +112,21 @@ class OneBotClient {
 
   _scheduleReconnect() {
     if (this._stopped || this._reconnectTimer) return;
+    this.reconnectAttempts += 1;
+    // 指数退避 + 随机抖动（防多实例/惊群）
+    const base = 3000;
+    const exp = Math.min(base * Math.pow(1.6, this.reconnectAttempts - 1), 30000);
+    const delay = Math.round(exp * (0.8 + Math.random() * 0.4));
+    this._retryDelay = delay;
+    const n = this.reconnectAttempts;
+    if (n === 1 || n % 5 === 0) {
+      L.warn(`[onebot] 连接断开，将在 ${Math.round(delay / 1000)}s 后进行第 ${n} 次自动重连`);
+    }
+    this.emit({ type: "meta", subType: "reconnecting", attempt: n, delay });
     this._reconnectTimer = setTimeout(() => {
       this._reconnectTimer = null;
       this.connect();
-    }, this._retryDelay);
-    this._retryDelay = Math.min(this._retryDelay * 1.6, 30000);
+    }, delay);
   }
 
   _loadWS() {

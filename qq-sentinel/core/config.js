@@ -1,4 +1,6 @@
 // core/config.js — 配置读写（userData/config.json）
+// v2：新增 schema 校验/越界钳制、reload()（外部改动热读）、保存前 .bak 备份、
+//     合并防原型污染。全部原 API 不变（load/save/get/set/setDataDir/dataDir）。
 const fs = require("fs");
 const path = require("path");
 
@@ -17,84 +19,237 @@ const DEFAULTS = {
   watch: {
     groups: [],        // 监听群号列表（空 = 全部）
     collectHistoryDays: 3,  // 启动时回拉历史天数
+    keywords: [],      // 关键词监控：消息包含任一词时重点记录
   },
   summarize: {
     dailyHour: 22,     // 每日汇总触发小时（24h）
-    mode: "auto",       // 汇总引擎：auto=有 DeepSeek key 用 AI，否则本地统计版；deepseek=强制 AI；local=强制本地
-    defaultDays: 7,    // 默认汇总窗口天数（一周；距上次汇总不足则从上次起）
+    mode: "auto",       // auto=有 key 用 AI 否则本地；deepseek=强制 AI；local=强制本地
+    defaultDays: 7,    // 默认汇总窗口天数
     includeAnnouncements: true,
     includeAtAll: true,
     includeConflicts: true,
     conflictWindowMin: 10,   // 吵架检测时间窗（分钟）
     conflictMessageMin: 8,   // 时间窗内最少消息数
-    ignoreBotUins: [],       // 补充忽略的官方机器人 QQ 号（默认自动过滤 2854196 号段）
-    autoIgnoreBots: true,    // 检测到 is_robot 成员时自动并入 ignoreBotUins
-    burstEnabled: true,      // 突发总结：检测消息激增时段，按 起因→过程→结果 复盘
+    ignoreBotUins: [],       // 补充忽略的官方机器人 QQ 号
+    autoIgnoreBots: true,    // 检测到 is_robot 时自动并入忽略列表
+    burstEnabled: true,      // 突发总结开关
     burstBucketMin: 5,       // 突发检测粒度（分钟/桶）
-    burstMinCount: 20,       // 突发绝对阈值：一个桶内至少多少条消息
-    burstMult: 2,            // 突发相对阈值：≥ 该群基线（桶计数中位数）的多少倍
-    burstContextMin: 10,     // 起因上下文：取突发窗口前多少分钟的消息找引爆点
-    burstMax: 5,             // 单次汇总最多列出几个突发
+    burstMinCount: 20,       // 突发绝对阈值：桶内至少多少条
+    burstMult: 2,            // 突发相对阈值：≥ 基线多少倍
+    burstContextMin: 10,     // 起因上下文窗口（分钟）
+    burstMax: 5,             // 单次最多几个突发
   },
   hotspots: {
-    enabled: true,     // 启用热点库（汇总参考 + 消息热梗标记）
+    enabled: true,     // 热点库开关
     cacheMinutes: 15,  // 热点缓存时长（分钟）
-    platforms: ["weibo", "douyin", "bilibili"], // 启用平台：weibo微博 / douyin抖音 / bilibili哔哩哔哩
+    platforms: ["weibo", "douyin", "bilibili"],
   },
   deepseek: {
-    apiKey: "",        // DEEPSEEK_API_KEY（也可从环境变量读取）
+    apiKey: "",        // DEEPSEEK_API_KEY（也可环境变量）
     model: "deepseek-chat",
     baseUrl: "https://api.deepseek.com",
   },
   ocr: {
-    enabled: true,        // 全家桶互调：调用图片识别工具（imgocr）OCR 群图
-    bridgeUrl: "http://127.0.0.1:8765", // imgocr 本地 OCR 服务地址
-    bridgeToken: "",      // 桥令牌（留空自动从 imgocr 的 userData 读取）
+    enabled: true,
+    bridgeUrl: "http://127.0.0.1:8765",
+    bridgeToken: "",      // 留空自动从 imgocr userData 读取
   },
   ui: {
     theme: "auto",     // auto | light | dark
   },
+  ollama: {
+    enabled: true,          // 本地 LLM（无 DeepSeek Key 时的 AI 降级）
+    url: "http://127.0.0.1:11434",
+    model: "qwen2.5:7b",
+    timeoutSec: 180,
+  },
+  notify: {
+    enabled: true,      // 系统通知总开关
+    atAll: true,        // @全体 通知
+    announcement: true, // 新公告 通知
+    conflict: true,     // 吵架冲突 通知
+    daily: true,        // 每日自动汇总完成 通知
+    focusSilent: true,  // 应用窗口聚焦时不打扰
+  },
+};
+
+// ---------- schema：类型 + 边界（越界钳制到边界；枚举不合法回退默认） ----------
+const SCHEMA = {
+  "napcat.mode": { enum: ["forward", "reverse"], def: "forward" },
+  "napcat.reversePort": { type: "int", min: 1, max: 65535 },
+  "napcat.autoStart": { type: "bool" },
+  "watch.collectHistoryDays": { type: "int", min: 0, max: 90 },
+  "summarize.dailyHour": { type: "int", min: 0, max: 23 },
+  "summarize.mode": { enum: ["auto", "deepseek", "local"], def: "auto" },
+  "summarize.defaultDays": { type: "int", min: 1, max: 90 },
+  "summarize.conflictWindowMin": { type: "int", min: 1, max: 1440 },
+  "summarize.conflictMessageMin": { type: "int", min: 1, max: 10000 },
+  "summarize.burstBucketMin": { type: "int", min: 1, max: 60 },
+  "summarize.burstMinCount": { type: "int", min: 1, max: 100000 },
+  "summarize.burstMult": { type: "num", min: 1, max: 100 },
+  "summarize.burstContextMin": { type: "int", min: 0, max: 1440 },
+  "summarize.burstMax": { type: "int", min: 1, max: 100 },
+  "hotspots.cacheMinutes": { type: "int", min: 1, max: 1440 },
+  "deepseek.baseUrl": { type: "string", maxLen: 500 },
+  "ocr.bridgeUrl": { type: "string", maxLen: 500 },
+  "ui.theme": { enum: ["auto", "light", "dark"], def: "auto" },
+  "notify.enabled": { type: "bool" },
+  "notify.atAll": { type: "bool" },
+  "notify.announcement": { type: "bool" },
+  "notify.conflict": { type: "bool" },
+  "notify.daily": { type: "bool" },
+  "notify.focusSilent": { type: "bool" },
+  "ollama.url": { type: "string", maxLen: 500 },
+  "ollama.model": { type: "string", maxLen: 200 },
+  "ollama.timeoutSec": { type: "int", min: 10, max: 600 },
+  "ollama.enabled": { type: "bool" },
 };
 
 let _dir = null;
 let _cfg = null;
+let _backedUp = false; // 进程内只备份一次（保存前的"上次可用"）
 
-function dataDir() {
-  return _dir;
-}
+function dataDir() { return _dir; }
+
 function setDataDir(dir) {
   _dir = dir;
-  fs.mkdirSync(dir, { recursive: true });
+  try { fs.mkdirSync(dir, { recursive: true }); } catch (e) { /* ignore */ }
 }
 
-function configPath() {
-  return path.join(_dir, "config.json");
+function configPath() { return _dir ? path.join(_dir, "config.json") : null; }
+
+// ---------- 合并防原型污染：拒绝 __proto__/constructor/prototype 键 ----------
+function isEvilKey(k) {
+  return k === "__proto__" || k === "constructor" || k === "prototype";
 }
+function deepMerge(base, override) {
+  const out = {};
+  for (const k of Object.keys(base || {})) {
+    if (isEvilKey(k)) continue;
+    out[k] = base[k];
+  }
+  for (const k of Object.keys(override || {})) {
+    if (isEvilKey(k)) continue;
+    const bv = base && base[k];
+    const ov = override[k];
+    if (bv && typeof bv === "object" && !Array.isArray(bv) &&
+        ov && typeof ov === "object" && !Array.isArray(ov)) {
+      out[k] = deepMerge(bv, ov);
+    } else {
+      out[k] = ov;
+    }
+  }
+  return out;
+}
+
+function pathGet(o, p) {
+  return p.split(".").reduce((acc, k) => (acc == null ? acc : acc[k]), o);
+}
+function pathSet(o, p, v) {
+  const parts = p.split(".");
+  let cur = o;
+  for (let i = 0; i < parts.length - 1; i++) {
+    if (cur[parts[i]] == null || typeof cur[parts[i]] !== "object") cur[parts[i]] = {};
+    cur = cur[parts[i]];
+  }
+  cur[parts[parts.length - 1]] = v;
+}
+
+// ---------- schema 校验 + 钳制（对已合并的 cfg 就地修正，返回修正条目） ----------
+function sanitizeCfg(cfg) {
+  const fixed = [];
+  const root = { root: cfg };
+  for (const [p, rule] of Object.entries(SCHEMA)) {
+    const raw = pathGet(cfg, p);
+    if (raw === undefined || raw === null) {
+      if (rule.def !== undefined) { pathSet(cfg, p, rule.def); }
+      continue;
+    }
+    if (rule.enum) {
+      if (!rule.enum.includes(raw)) {
+        fixed.push(p + "=" + JSON.stringify(raw) + " → " + JSON.stringify(rule.def));
+        pathSet(cfg, p, rule.def);
+      }
+      continue;
+    }
+    if (rule.type === "bool") {
+      if (typeof raw !== "boolean") {
+        fixed.push(p + "=" + JSON.stringify(raw) + " → bool");
+        pathSet(cfg, p, raw === true || raw === "true" || raw === 1 ? true : false);
+      }
+      continue;
+    }
+    if (rule.type === "string") {
+      if (typeof raw !== "string" || (rule.maxLen && raw.length > rule.maxLen)) {
+        fixed.push(p + "=非字符串/超长");
+        pathSet(cfg, p, rule.def !== undefined ? rule.def : "");
+      }
+      continue;
+    }
+    if (rule.type === "int" || rule.type === "num") {
+      const n = Number(raw);
+      if (!Number.isFinite(n)) {
+        fixed.push(p + "=非数字");
+        if (rule.def !== undefined) pathSet(cfg, p, rule.def);
+        continue;
+      }
+      let v = rule.type === "int" ? Math.trunc(n) : n;
+      if (rule.min !== undefined && v < rule.min) v = rule.min;
+      if (rule.max !== undefined && v > rule.max) v = rule.max;
+      if (v !== raw) { fixed.push(p + "=" + String(raw) + " → " + v); pathSet(cfg, p, v); }
+    }
+  }
+  return fixed;
+}
+
+function log(msg) { try { console.error("[config] " + msg); } catch (e) {} }
 
 function load() {
   if (_cfg) return _cfg;
-  let base = { ...DEFAULTS };
-  try {
-    if (fs.existsSync(configPath())) {
-      const saved = JSON.parse(fs.readFileSync(configPath(), "utf8"));
-      base = deepMerge(DEFAULTS, saved);
+  return reload();
+}
+
+// reload()：无视缓存重读磁盘并校验（供外部编辑热读 / 测试）
+function reload() {
+  let base = deepMerge({}, DEFAULTS);
+  const cp = configPath();
+  if (cp && fs.existsSync(cp)) {
+    try {
+      const saved = JSON.parse(fs.readFileSync(cp, "utf8"));
+      if (saved && typeof saved === "object" && !Array.isArray(saved)) {
+        base = deepMerge(DEFAULTS, saved);
+      } else {
+        log("配置文件结构异常（非对象），使用默认值: " + cp);
+      }
+    } catch (e) {
+      log("配置读取失败，使用默认值: " + e.message);
     }
-  } catch (e) {
-    console.error("[config] load error:", e.message);
   }
+  const fixed = sanitizeCfg(base);
+  if (fixed.length) log("配置越界/非法已钳制: " + fixed.join("; "));
   _cfg = base;
   return _cfg;
 }
 
+function backup() {
+  const cp = configPath();
+  if (!cp || !fs.existsSync(cp)) return;
+  if (_backedUp) return; // 进程内只做一次（首次保存前）
+  _backedUp = true;
+  try { fs.copyFileSync(cp, cp + ".bak"); } catch (e) { /* ignore */ }
+}
+
 function save() {
+  const cp = configPath();
+  if (!cp) { log("save: dataDir 未设置"); return; }
   try {
     fs.mkdirSync(_dir, { recursive: true });
-    // 原子写：先写临时文件再重命名，防中途崩溃损坏配置
-    const tmp = configPath() + ".tmp";
+    backup(); // 保存前留 .bak（上次可用）
+    const tmp = cp + ".tmp";
     fs.writeFileSync(tmp, JSON.stringify(_cfg, null, 2), "utf8");
-    fs.renameSync(tmp, configPath());
+    fs.renameSync(tmp, cp); // 原子替换
   } catch (e) {
-    console.error("[config] save error:", e.message);
+    log("save error: " + e.message);
   }
 }
 
@@ -107,37 +262,23 @@ function set(keyPath, value) {
   const cfg = load();
   const parts = String(keyPath || "").split(".").filter(Boolean);
   if (parts.length === 0) return value;
-  // 防原型污染：禁止 __proto__ / constructor / prototype 作为 key
-  for (const p of parts) {
-    if (p === "__proto__" || p === "constructor" || p === "prototype") return value;
-  }
+  for (const p of parts) if (isEvilKey(p)) return value;
   let o = cfg;
   for (let i = 0; i < parts.length - 1; i++) {
     if (o[parts[i]] == null || typeof o[parts[i]] !== "object") o[parts[i]] = {};
     o = o[parts[i]];
   }
   o[parts[parts.length - 1]] = value;
+  // 立即钳制本路径（若在 schema 内）
+  const f = sanitizeCfg(cfg);
+  if (f.length) log("保存值钳制: " + f.join("; "));
   save();
   return value;
 }
 
-function deepMerge(base, override) {
-  const out = { ...base };
-  for (const k of Object.keys(override || {})) {
-    if (
-      base[k] &&
-      typeof base[k] === "object" &&
-      !Array.isArray(base[k]) &&
-      typeof override[k] === "object" &&
-      !Array.isArray(override[k])
-    ) {
-      out[k] = deepMerge(base[k], override[k]);
-    } else {
-      out[k] = override[k];
-    }
-  }
-  return out;
-}
-
-module.exports = { DEFAULTS, dataDir, setDataDir, load, save, get, set };
-
+module.exports = {
+  DEFAULTS, SCHEMA,
+  dataDir, setDataDir,
+  load, reload, save, get, set,
+  sanitizeCfg, deepMerge,
+};

@@ -18,10 +18,12 @@ contextBridge.exposeInMainWorld("sentinelApi", {
   groupsFromRemote: safe("groups:fromRemote"),
   messagesGet: safe("messages:get"),
   eventsGet: safe("events:get"),
+  kwHitsList: safe("kw-hits:list"),
   announcementsGet: safe("announcements:get"),
   summaryRun: safe("summary:run"),
   summaryAll: safe("summary:all"),
   summaryLast: safe("summary:last"),
+  reportExport: safe("report:export"),
   hotspotsStatus: safe("hotspots:status"),
   backfill: safe("history:backfill"),
   backfillAll: safe("history:backfillAll"),
@@ -46,7 +48,7 @@ contextBridge.exposeInMainWorld("sentinelApi", {
   autostartSet: safe("autostart:set"),
 
   on: (channel, fn) => {
-    const valid = ["bot:connected", "bot:disconnected", "bot:connect-failed", "bot:connecting", "bot:event", "groups:updated", "summary:done", "bots:updated"];
+    const valid = ["bot:connected", "bot:disconnected", "bot:reconnecting", "bot:connect-failed", "bot:connecting", "bot:event", "groups:updated", "summary:done", "bots:updated"];
     if (!valid.includes(channel)) return () => {};
     const handler = (_e, payload) => fn(payload);
     ipcRenderer.on(channel, handler);

@@ -19,3 +19,5 @@ imgocr/resources/tessdata/
 *.bak
 *.tmp
 .DS_Store
+# qq-sentinel 内置语义模型（129MB，打包时随包，不入库）
+qq-sentinel/models/

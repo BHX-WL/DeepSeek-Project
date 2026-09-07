@@ -53,12 +53,12 @@ const check = (name, cond) => { console.log((cond ? "✅" : "❌"), name); if (!
   collector._onGroupMessage(fakeMsg(10001, 1, "群A第四条(全采)"));
   check("清空指定：10001 变 3 条", store.getMessages("10001", {}).length === 3);
 
-  // 4) 通知过滤
+  // 4) 撤回：按产品契约（2026 彻底忽略撤回）——被指定群内也一律不记录
   config.set("watch.groups", ["10001"]);
   collector._onNotice({ post_type: "notice", notice_type: "group_recall", group_id: 20002, time: Math.floor(Date.now()/1000), user_id: 1, operator_id: 2, message_id: 99 });
-  check("通知过滤：20002 无撤回事件", store.listEvents("20002").length === 0);
+  check("非指定群 20002 无撤回事件", store.listEvents("20002").length === 0);
   collector._onNotice({ post_type: "notice", notice_type: "group_recall", group_id: 10001, time: Math.floor(Date.now()/1000), user_id: 1, operator_id: 2, message_id: 100 });
-  check("通知放行：10001 有撤回事件", store.listEvents("10001").some((e) => e.kind === "recall"));
+  check("指定群 10001：撤回被忽略（无事件）", !store.listEvents("10001").some((e) => e.kind === "recall"));
 
   console.log(ok ? "✅ WATCHGROUPS OK" : "❌ WATCHGROUPS FAIL");
   process.exit(ok ? 0 : 1);

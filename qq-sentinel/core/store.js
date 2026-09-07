@@ -23,6 +23,7 @@ function init(dir) {
   fs.mkdirSync(path.join(dir, "messages"), { recursive: true });
   fs.mkdirSync(path.join(dir, "announcements"), { recursive: true });
   fs.mkdirSync(path.join(dir, "events"), { recursive: true });
+  fs.mkdirSync(path.join(dir, "kw-hits"), { recursive: true });
   loadGroups();
   scanCounts();
 }
@@ -40,6 +41,10 @@ function annFile(gid) {
 function evtFile(gid) {
   const s = safeGid(gid);
   return s ? path.join(_dir, "events", `${s}.jsonl`) : null;
+}
+function kwFile(gid) {
+  const s = safeGid(gid);
+  return s ? path.join(_dir, "kw-hits", `${s}.jsonl`) : null;
 }
 
 function loadGroups() {
@@ -274,6 +279,22 @@ function listEvents(gid, limit = 200) {
   return all.slice(-limit).reverse();
 }
 
+// ---------- 关键词命中（逐条存档） ----------
+function appendKeywordHit(gid, rec) {
+  const file = kwFile(gid);
+  if (!file) return false;
+  return append(file, rec);
+}
+function listKeywordHits(gid, limit = 500) {
+  const file = kwFile(gid);
+  if (!file || !fs.existsSync(file)) return [];
+  const n = Math.max(50, Math.min(5000, Number(limit) || 500));
+  const all = readTailLines(file, n).map((ln) => {
+    try { return JSON.parse(ln); } catch (e) { return null; }
+  }).filter(Boolean);
+  return all.slice(-limit).reverse();
+}
+
 // ---------- 统计 ----------
 function stats() {
   const out = [];
@@ -296,5 +317,6 @@ module.exports = {
   appendMessage, getMessages, messageCount,
   appendAnnouncement, listAnnouncements,
   appendEvent, listEvents,
+  appendKeywordHit, listKeywordHits,
   stats,
 };

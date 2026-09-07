@@ -1,5 +1,5 @@
 // main.js — QQ 群大事监控器主进程
-const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, shell, Notification } = require("electron");
 const { execFileSync } = require("child_process");
 const path = require("path");
 const fs = require("fs");
@@ -12,6 +12,7 @@ const { Collector } = require("./core/collector");
 const { Summarizer } = require("./core/summarizer");
 const napcat = require("./core/napcat");
 const bots = require("./core/bots");
+const reportExporter = require("./core/export-report");
 const imgbridge = require("./core/imgbridge");
 
 // ============ 单实例：全家桶主角，避免重复启动 ============
@@ -148,6 +149,8 @@ function broadcast(channel, payload) {
     collector = new Collector(client);
     summarizer = new Summarizer(client, collector);
     collector.attach();
+    collector.onEvent = (gid, evt) => { if (evt && evt.kind) maybeNotify(evt.kind, gid, evt.title, evt.text || evt.summary); };
+    summarizer.onNotify = (gid, rec) => maybeNotify("conflict", gid, rec && rec.title, rec && (rec.summary || rec.reason));
     wireBotEvents(client);
     client.connect();
     armConnectTimeout(10000); // 10 秒未连上则广播失败原因
@@ -369,6 +372,7 @@ function registerIpc() {
 
   safeHandle("messages:get", (_e, gid, opts) => store.getMessages(gid, opts || {}));
   safeHandle("events:get", (_e, gid, limit) => store.listEvents(gid, limit || 200));
+  safeHandle("kw-hits:list", (_e, gid, limit) => store.listKeywordHits(gid, limit || 500));
   safeHandle("announcements:get", (_e, gid) => store.listAnnouncements(gid));
 
   safeHandle("summary:run", async (_e, gid, opts) => {
@@ -388,6 +392,41 @@ function registerIpc() {
   });
   // 获取某群上次汇总时间（供 UI 展示默认窗口）
   safeHandle("summary:last", (_e, gid) => ({ ok: true, last: store.getLastSummary(gid) }));
+
+  // 报告导出（.md / .json）：汇总记录 + 消息样本，写入选中的本地路径
+  safeHandle("report:export", async (_e, payload) => {
+    try {
+      const p = payload || {};
+      const gid = String(p.gid || "").trim();
+      if (!/^\d{1,20}$/.test(gid)) return { ok: false, error: "无效群号" };
+      const format = p.format === "json" ? "json" : "md";
+      const until = p.until || new Date().toISOString();
+      let since = p.since;
+      if (!since) {
+        const d = new Date();
+        d.setDate(d.getDate() - (Number(p.days) || 7));
+        since = d.toISOString();
+      }
+      const events = store.listEvents(gid, 10000).filter((e) => e && e.time >= since && e.time <= until);
+      const msgs = store.getMessages(gid, { since, until, limit: 20000 });
+      const gname = groupLabel(gid);
+      const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+        title: "导出报告",
+        defaultPath: path.join(app.getPath("downloads"), `qq-report-${gid}-${new Date().toISOString().slice(0, 10)}.${format}`),
+        filters: format === "json" ? [{ name: "JSON", extensions: ["json"] }] : [{ name: "Markdown", extensions: ["md"] }],
+      });
+      if (canceled || !filePath) return { ok: false, canceled: true };
+      const content = format === "json"
+        ? JSON.stringify(reportExporter.buildReportJson({ gid, groupName: gname, since, until, events, msgs }), null, 2)
+        : reportExporter.buildReportMarkdown({ gid, groupName: gname, since, until, events, msgs });
+      fs.writeFileSync(filePath, content, "utf8");
+      L.info(`[export] ${filePath}（${events.length} 事件 / ${msgs.length} 消息）`);
+      return { ok: true, path: filePath, events: events.length, messages: msgs.length };
+    } catch (e) {
+      L.warn("[export] 失败:", e && e.message);
+      return { ok: false, error: e && e.message };
+    }
+  });
 
   // 热点库状态（微博热搜缓存信息）
   safeHandle("hotspots:status", async () => {
@@ -485,6 +524,8 @@ function wireBotEvents(src) {
         setTimeout(() => bootstrapCollections(), 1500);
       } else if (evt.subType === "disconnected") {
         broadcast("bot:disconnected", {});
+      } else if (evt.subType === "reconnecting") {
+        broadcast("bot:reconnecting", { attempt: evt.attempt, delay: evt.delay });
       }
       return;
     }
@@ -677,10 +718,50 @@ function startTimers() {
       store.listGroups().filter((g) => collector && collector.isWatchedGroup(g.groupId)).forEach((g) => {
         summarizer.summarizeGroup(g.groupId, { mode: "default" }).then((r) => {
           broadcast("summary:done", r);
+          if (r && r.ok) {
+            maybeNotify("daily", g.groupId, `每日大事汇总 · ${groupLabel(g.groupId)}`, (r.summary || "").slice(0, 200));
+          }
         }).catch(() => {});
       });
     }
   }, 60 * 1000));
+}
+
+// ---------- 系统通知 ----------
+const _notifyRate = new Map(); // kind:gid -> ts（60s 限频）
+const NOTIFY_KINDS = { at_all: "atAll", announcement: "announcement", conflict: "conflict", summary: "daily", daily: "daily" };
+
+function groupLabel(gid) {
+  try {
+    const g = store.listGroups().find((x) => String(x.groupId) === String(gid));
+    return g && g.name ? g.name : `群${gid}`;
+  } catch (e) { return `群${gid}`; }
+}
+
+function maybeNotify(kind, gid, title, body) {
+  try {
+    const n = config.get("notify") || {};
+    if (n.enabled === false) return;
+    const keyOf = NOTIFY_KINDS[kind];
+    if (!keyOf || n[keyOf] === false) return; // 只通知白名单事件 + 各自开关
+    if (n.focusSilent !== false && mainWindow && typeof mainWindow.isFocused === "function" && mainWindow.isFocused()) return;
+    if (!Notification || !Notification.isSupported || !Notification.isSupported()) return;
+    const rateKey = kind + ":" + gid;
+    const now = Date.now();
+    if (now - (_notifyRate.get(rateKey) || 0) < 60000) return; // 同事件 60s 内不重复
+    _notifyRate.set(rateKey, now);
+    const ttl = String(title || kind || "QQ 监控").slice(0, 80);
+    const bd = String(body || "").slice(0, 300);
+    const notif = new Notification({ title: ttl, body: bd, silent: false });
+    notif.on("click", () => {
+      if (mainWindow) {
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        mainWindow.show();
+        mainWindow.focus();
+      }
+    });
+    notif.show();
+  } catch (e) { L.warn("[notify] 发送失败:", e && e.message); }
 }
 
 function shutdown() {

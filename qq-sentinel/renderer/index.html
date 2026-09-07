@@ -70,6 +70,7 @@
           <button id="btn-backfill-all" class="btn small" title="回拉所有指定爬取群的历史消息">回拉全部指定群</button>
           <input id="ocr-img-limit" type="number" min="1" max="50" value="10" style="width:56px" title="识别最近几张图片" />
           <button id="btn-ocr-images" class="btn small" title="拉取该群最近图片 → 调用图片识别工具(全家桶) OCR → 结果写入时间线">🔍 识别群内图片</button>
+          <button id="btn-kw-hits" class="btn small" title="查看该群关键词逐条命中记录">🔑 关键词记录</button>
         </div>
         <p class="hint" style="font-size:12px;color:var(--muted);margin-top:6px">
           历史来自 QQ 本地数据库缓存（约数周）。登录前的消息若本地有缓存即可采到；缓存有限时靠持续在线实时积累。
@@ -80,6 +81,13 @@
       <!-- 汇总报告 -->
       <section class="tab-pane" id="tab-reports">
         <h2>汇总报告</h2>
+        <div class="toolbar" style="flex-wrap:wrap;margin-bottom:8px">
+          <span style="font-size:12.5px;color:var(--muted)">🔑 监控词：</span>
+          <span id="kw-chips" class="spec-list" style="display:inline-flex;flex-wrap:wrap"></span>
+          <input id="kw-add-input" placeholder="添加监控词…（命中即重点记录）" class="spec-pick-search" style="width:170px;padding:3px 8px" />
+          <button id="btn-kw-add" class="btn small">添加</button>
+        </div>
+        <p class="hint" style="font-size:12px;color:var(--muted);margin-top:0;margin-bottom:8px">命中监控词的消息会作为“关键词”事件重点记录；每份报告的末尾会自动附上该时段「关键词命中」统计。</p>
         <div class="toolbar">
           <select id="report-group"></select>
           <button id="btn-summary-default" class="btn small" title="汇总窗口：一周前→现在；若上次汇总距今不足一周则从上次汇总时间开始">📅 默认汇总（一周/上次起）</button>
@@ -96,6 +104,15 @@
             <button id="btn-summary-period" class="btn small">汇总该时段</button>
             <button id="btn-summary-period-all" class="btn small" title="所有指定爬取群各汇总一次该时段">全部指定群</button>
           </div>
+        </div>
+        <div class="panel" style="margin-top:10px">
+          <h3>📤 导出报告</h3>
+          <div class="toolbar" style="flex-wrap:wrap">
+            <button id="btn-export-md" class="btn small">导出 Markdown</button>
+            <button id="btn-export-json" class="btn small">导出 JSON</button>
+            <span id="export-hint" class="saved-hint"></span>
+          </div>
+          <p class="hint" style="font-size:12px;color:var(--muted);margin-top:6px">导出当前选中群在自定义时段（未填则最近 7 天）内的大事/汇总记录与消息样本。</p>
         </div>
         <div id="report-list" class="event-list"></div>
       </section>
@@ -158,6 +175,21 @@
           <label>API 地址 <input type="text" id="set-ds-base"></label>
         </div>
         <div class="panel">
+          <h3>🧠 汇总引擎与本地 AI</h3>
+          <label>汇总引擎
+            <select id="set-summary-mode">
+              <option value="auto">auto：优先 DeepSeek → Ollama → 本地统计</option>
+              <option value="deepseek">deepseek：只用 DeepSeek（无 Key 时降级）</option>
+              <option value="ollama">ollama：只用本地 Ollama</option>
+              <option value="local">local：只用本地统计</option>
+            </select>
+          </label>
+          <label><input type="checkbox" id="set-ollama-enabled"> 启用 Ollama（本地模型，数据不出本机）</label>
+          <label>Ollama 地址 <input type="text" id="set-ollama-url" placeholder="http://127.0.0.1:11434"></label>
+          <label>Ollama 模型 <input type="text" id="set-ollama-model" placeholder="qwen2.5:7b"></label>
+          <p class="hint" style="font-size:12px;color:var(--muted);margin:4px 0 0">已装 Ollama 本地服务时，无 DeepSeek Key 也能 AI 汇总/判冲突。</p>
+        </div>
+        <div class="panel">
           <h3>监听</h3>
           <label>连接模式
             <select id="set-mode">
@@ -215,6 +247,16 @@
           </label>
           <label>缓存时长（分钟） <input type="number" id="set-hotspots-cache" min="5" max="120"></label>
         </div>
+        <div class="panel">
+          <h3>🔔 系统通知</h3>
+          <label><input type="checkbox" id="set-notify-enabled"> 启用系统通知</label>
+          <label><input type="checkbox" id="set-notify-atall"> @全体 通知</label>
+          <label><input type="checkbox" id="set-notify-ann"> 新公告 通知</label>
+          <label><input type="checkbox" id="set-notify-conflict"> 吵架冲突 通知</label>
+          <label><input type="checkbox" id="set-notify-daily"> 每日自动汇总完成 通知</label>
+          <label><input type="checkbox" id="set-notify-focus"> 应用窗口聚焦时不打扰</label>
+          <p class="hint" style="font-size:12px;color:var(--muted);margin:4px 0 0">断线自动重连时也会在任务栏提示。通知在 Windows 托盘/通知中心展示。</p>
+        </div>
         <div class="toolbar">
           <button id="btn-save-settings" class="btn primary">保存设置</button>
           <span id="settings-saved" class="saved-hint"></span>
@@ -243,6 +285,15 @@
     </div>
   </div>
 
+  <!-- 关键词命中记录 -->
+  <div id="kw-hits-modal" class="modal hidden">
+    <div class="modal-box">
+      <div class="modal-head"><h3>🔑 关键词命中记录</h3><button class="btn small" id="btn-kw-hits-close" title="关闭">✕</button></div>
+      <div class="modal-body"><div id="kw-hits-list" class="event-list"></div></div>
+      <div class="modal-foot"><span class="saved-hint" id="kw-hits-hint"></span></div>
+    </div>
+  </div>
+
   <!-- 免责声明（首次强制） -->
   <div id="disclaimer-modal" class="modal hidden">
     <div class="modal-box">
@@ -256,6 +307,19 @@
       </div>
     </div>
   </div>
+  <!-- 快速上手（首次引导） -->
+  <div id="onboard-modal" class="modal hidden">
+    <div class="modal-box">
+      <div class="modal-head"><h3>👋 快速上手</h3><button class="btn small" id="btn-onboard-close" title="关闭">✕</button></div>
+      <div class="modal-body" style="max-height:60vh;overflow:auto">
+        <div id="onboard-body"></div>
+      </div>
+      <div class="modal-foot">
+        <button id="btn-onboard-ok" class="btn primary">开始使用</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 协议中心 -->
   <!-- 更新日志 -->
   <div id="changelog-modal" class="modal hidden">

@@ -3,6 +3,7 @@ const L = require("./logger");
 const store = require("./store");
 const config = require("./config");
 const hotspots = require("./hotspots");
+const { normalizeKeywords, matchKeywords } = require("./keywords");
 
 class Collector {
   constructor(client) {
@@ -12,6 +13,7 @@ class Collector {
     this._conflictWindows = new Map(); // gid -> [{time, user_id, msg, seq}]
     this.onEvent = null;            // 上层关注的事件回调：(gid, evt) => void
     this.onConflict = null;         // 吵架候选回调：(gid, window, messages) => void
+    this._kwWindow = new Map();     // "gid::word" -> 最近一次时间线事件时间戳（60s 去抖）
     this.stopped = false;
   }
 
@@ -82,6 +84,9 @@ class Collector {
       groupName: this.groupMeta.get(gid)?.name,
     });
 
+    // 关键词监控：命中 → 时间线事件（同词 60s 去抖）+ 逐条存档
+    this._matchKeywordRecord(gid, msg);
+
     // @全体 = 大事
     if (atAll && config.get("summarize.includeAtAll")) {
       this._fireEvent(gid, {
@@ -100,6 +105,46 @@ class Collector {
     // 吵架窗口检测
     this._trackConflict(gid, msg);
     this.onEvent?.(gid, msg);
+  }
+
+  // ---------- 关键词监控 ----------
+  // 命中即“重点记录”：1) 进大事时间线（同一词 60 秒内只产生一条，防刷屏）2) 逐条落盘 kw-hits 供事后检索
+  _matchKeywordRecord(gid, msg) {
+    try {
+      const raw = config.get("watch.keywords");
+      const words = normalizeKeywords(raw);
+      const text = String(msg.text || "");
+      const hits = matchKeywords(text, words);
+      if (!hits.length) return;
+      const now = Date.now();
+      const key = gid + "::" + hits[0].toLowerCase();
+      const last = this._kwWindow.get(key) || 0;
+      if (now - last >= 60000) {
+        this._kwWindow.set(key, now);
+        this._fireEvent(gid, {
+          kind: "keyword",
+          title: "关键词「" + hits.join("、") + "」",
+          text: (msg.nickname ? msg.nickname + "：" : "") + text,
+          words: hits.slice(0, 10),
+          time: msg.time,
+          msg,
+        });
+      }
+      // 逐条完整存档（不受去抖影响）
+      store.appendKeywordHit(gid, {
+        id: "kw-" + gid + "-" + now + "-" + Math.random().toString(36).slice(2, 8),
+        groupId: gid,
+        words: hits.slice(0, 10),
+        text: String(text).slice(0, 2000),
+        nickname: String(msg.nickname || msg.userId || "").slice(0, 100),
+        userId: msg.userId || "",
+        time: msg.time,
+        seq: msg.seq || "",
+        savedAt: new Date().toISOString(),
+      });
+    } catch (e) {
+      L.debug("[collector] keyword record skip:", e && e.message);
+    }
   }
 
   // ---------- 通知（公告/撤回/管理） ----------

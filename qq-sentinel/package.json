@@ -5,13 +5,51 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "build": "electron-packager . qq-sentinel --platform=win32 --arch=x64 --out=dist --overwrite"
+    "build": "electron-packager . qq-sentinel --platform=win32 --arch=x64 --out=dist --overwrite",
+    "test": "node --test \"test/*.test.js\"",
+    "test:unit": "node --test test/",
+    "test:integration": "node tools/test-readonly.js && node tools/test-watchgroups.js && node tools/test-pipeline.js",
+    "build:legacy": "electron-packager . qq-sentinel --platform=win32 --arch=x64 --out=dist --overwrite",
+    "dist": "electron-builder --win --dir",
+    "dist:installer": "electron-builder --win"
   },
   "devDependencies": {
     "electron": "^43.4.0",
+    "electron-builder": "^26.15.3",
     "electron-packager": "^17.1.2"
   },
   "dependencies": {
+    "@xenova/transformers": "^2.17.2",
     "ws": "^8.21.3"
+  },
+  "build": {
+    "appId": "com.bhxwl.qqsentinel",
+    "productName": "QQ Sentinel",
+    "asar": false,
+    "directories": {
+      "output": "dist-eb"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "package.json",
+      "core/**/*",
+      "renderer/**/*",
+      "tools/**/*",
+      "napcat/**/*",
+      "README.md",
+      "models/**"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "artifactName": "QQSentinel.${version}.${ext}"
   }
 }
