@@ -375,6 +375,7 @@ async function loadSettings() {
   const nt = await api.configGet("notify");
   const llm = await api.configGet("ollama");
   const sm = await api.configGet("summarize");
+  const mo = await api.configGet("monitor");
   $("#set-ds-key").value = d.apiKey || "";
   $("#set-ds-model").value = d.model || "";
   $("#set-ds-base").value = d.baseUrl || "";
@@ -390,8 +391,16 @@ async function loadSettings() {
   $("#set-token").value = n.token || "";
   $("#set-history-days").value = w.collectHistoryDays ?? 3;
   $("#set-daily-hour").value = s.dailyHour ?? 22;
+  if (mo) {
+    $("#set-announce-min").value = mo.announcePollMinutes ?? 60;
+    $("#set-api-interval").value = mo.apiMinIntervalMs ?? 250;
+    $("#set-botscan-auto").checked = !!mo.botScanAuto;
+    $("#set-botscan-hours").value = mo.botScanHours ?? 24;
+    $("#set-botscan-hours").disabled = !mo.botScanAuto;
+  }
   $("#set-default-days").value = s.defaultDays ?? 7;
   $("#set-groups").value = (w.groups || []).join(",");
+  $("#set-history-days").min = 0;
   $("#set-qq-path").value = n.qqPath || "";
   $("#set-data-dir").value = n.dataDir || "D:\\QQNT-MULTI-DATA";
   $("#set-conflicts").checked = !!s.includeConflicts;
@@ -446,6 +455,12 @@ async function saveSettings() {
   await api.configSet("watch", {
     collectHistoryDays: parseInt($("#set-history-days").value, 10) || 3,
     groups: $("#set-groups").value.split(",").map((s) => s.trim()).filter(Boolean),
+  });
+  await api.configSet("monitor", {
+    announcePollMinutes: parseInt($("#set-announce-min").value, 10) || 60,
+    apiMinIntervalMs: parseInt($("#set-api-interval").value, 10) || 250,
+    botScanAuto: $("#set-botscan-auto").checked,
+    botScanHours: parseInt($("#set-botscan-hours").value, 10) || 24,
   });
   await api.configSet("summarize", {
     dailyHour: parseInt($("#set-daily-hour").value, 10) || 22,
@@ -698,6 +713,7 @@ $("#btn-napcat-stop").addEventListener("click", async () => {
   $("#timeline-group").addEventListener("change", renderTimeline);
   $("#report-group").addEventListener("change", renderReports);
   $("#btn-save-settings").addEventListener("click", saveSettings);
+  $("#set-botscan-auto").addEventListener("change", () => { $("#set-botscan-hours").disabled = !$("#set-botscan-auto").checked; });
 
   // 导出报告（.md / .json）
   async function doExport(format) {
@@ -787,6 +803,12 @@ $("#btn-napcat-stop").addEventListener("click", async () => {
   // 实时事件
   api.on("bot:connected", () => { toast("✅ 机器人已连接"); refreshStatus(); });
   api.on("bot:disconnected", () => { toast("❌ 连接断开（将自动重连）"); refreshStatus(); });
+  api.on("bot:risk", (p) => {
+    const m = (p && p.message) || "";
+    toast("⚠️ 疑似风控：主动拉取已自动暂停。建议停止小号操作并降低频率。" + (m ? "（" + m + "）" : ""), 8000);
+    const el = $("#conn-status");
+    if (el) { el.textContent = "⚠️ 风控暂停"; el.classList.remove("on"); }
+  });
   api.on("bot:reconnecting", (p) => {
     const n = p?.attempt || 1;
     const el = $("#conn-status");

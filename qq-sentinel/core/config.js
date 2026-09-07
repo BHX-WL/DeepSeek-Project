@@ -18,8 +18,15 @@ const DEFAULTS = {
   },
   watch: {
     groups: [],        // 监听群号列表（空 = 全部）
-    collectHistoryDays: 3,  // 启动时回拉历史天数
+    collectHistoryDays: 0,  // 启动回拉历史天数（保守默认 0 = 不回拉，靠在线实时积累；过大回拉会增加风控风险）
     keywords: [],      // 关键词监控：消息包含任一词时重点记录
+  },
+  // 降封号风险（monitor）：主动拉取的克制参数
+  monitor: {
+    announcePollMinutes: 60,  // 群公告轮询间隔（分钟，保守默认 60）
+    botScanAuto: false,       // 是否自动周期性扫描机器人（默认关=手动「🤖 检测机器人」）
+    botScanHours: 24,         // 自动扫描间隔（小时，仅在 botScanAuto=true 时生效）
+    apiMinIntervalMs: 250,    // 主动 API 最小间隔（毫秒，全局节流）
   },
   summarize: {
     dailyHour: 22,     // 每日汇总触发小时（24h）
@@ -99,6 +106,10 @@ const SCHEMA = {
   "notify.conflict": { type: "bool" },
   "notify.daily": { type: "bool" },
   "notify.focusSilent": { type: "bool" },
+  "monitor.announcePollMinutes": { type: "int", min: 5, max: 1440 },
+  "monitor.botScanHours": { type: "int", min: 1, max: 168 },
+  "monitor.apiMinIntervalMs": { type: "int", min: 50, max: 10000 },
+  "monitor.botScanAuto": { type: "bool" },
   "ollama.url": { type: "string", maxLen: 500 },
   "ollama.model": { type: "string", maxLen: 200 },
   "ollama.timeoutSec": { type: "int", min: 10, max: 600 },

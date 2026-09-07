@@ -200,7 +200,7 @@
           <label>OneBot WS 地址（正向模式） <input type="text" id="set-ws-url"></label>
           <label>反向 WS 端口 <input type="number" id="set-reverse-port" min="1024" max="65535"></label>
           <label>Token <input type="password" id="set-token"></label>
-          <label>回拉历史天数 <input type="number" id="set-history-days" min="1" max="30"></label>
+          <label>回拉历史天数 <input type="number" id="set-history-days" min="0" max="30" title="保守默认 0=不回拉（靠在线积累）；拉取历史属主动操作，越大越易触发风控"></label>
           <label>每日汇总时间（小时） <input type="number" id="set-daily-hour" min="0" max="23"></label>
           <label>默认汇总天数（一周=7） <input type="number" id="set-default-days" min="1" max="90"></label>
           <label>监听群号（逗号分隔，空=全部） <input type="text" id="set-groups"></label>
@@ -246,6 +246,15 @@
             <span><input type="checkbox" id="set-hot-bilibili"> B站</span>
           </label>
           <label>缓存时长（分钟） <input type="number" id="set-hotspots-cache" min="5" max="120"></label>
+        </div>
+        <div class="panel">
+          <h3>🔒 风控与采集克制</h3>
+          <p class="hint" style="font-size:12px;color:var(--muted);margin:0 0 6px">非官方协议登录存在封号风险（务必小号）。下列为“保守默认”，可调低频率进一步降低风险：</p>
+          <label>公告轮询间隔（分钟） <input type="number" id="set-announce-min" min="5" max="1440" title="主动拉群公告的间隔；越大越保守"></label>
+          <label>主动 API 最小间隔（毫秒） <input type="number" id="set-api-interval" min="100" max="5000" title="所有查询/拉取的全局节流间隔"></label>
+          <label><input type="checkbox" id="set-botscan-auto"> 自动周期性扫描机器人（默认关=手动「🤖 检测机器人」）</label>
+          <label>自动扫描间隔（小时） <input type="number" id="set-botscan-hours" min="1" max="168" disabled title="需勾选自动扫描后生效"></label>
+          <p class="hint" style="font-size:12px;color:var(--muted);margin:4px 0 0">遇到疑似风控（操作频繁/请求被限）时，应用会自动暂停主动拉取并提示。</p>
         </div>
         <div class="panel">
           <h3>🔔 系统通知</h3>

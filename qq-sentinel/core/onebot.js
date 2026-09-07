@@ -40,6 +40,14 @@ class OneBotClient {
     this._connecting = false;
     this._seq = 0;
     this._pending = new Map();       // echo -> {resolve,reject,method}
+    // 降风险：主动 API 节流 + 失败退避 + 风控信号（保守默认）
+    this.apiMinInterval = Math.max(50, Number(opts.apiMinIntervalMs) || 250);
+    this._lastCallAt = 0;
+    this._gate = Promise.resolve();
+    this.failStreak = 0;
+    this.riskHold = false;
+    this._holdUntil = 0;
+    this.lastError = "";
   }
 
   onEvent(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); }
@@ -135,8 +143,45 @@ class OneBotClient {
 
   // API 调用（OneBot 11）：优先走已连接的 WS（NapCat 只开正向 WS 3001 时也可用），HTTP 作为兜底。
   // 仅允许只读 action（白名单/查询类），写操作一律拒绝。
+  // 风控/风险信号词（含常见错误文案；命中即暂停主动拉取并上报）
+  static RISK_HINTS = [/风控/i, /操作频繁/i, /请求频繁/i, /请稍后/i, /too many/i, /rate.?limit/i, /1203/, /1202/, /130101/i];
+
+  _noteSuccess() { this.failStreak = 0; if (this.riskHold && Date.now() > this._holdUntil) this.riskHold = false; }
+  _noteFailure(action, msg) {
+    const s = String(msg || "");
+    this.lastError = s;
+    this.failStreak += 1;
+    if (OneBotClient.RISK_HINTS.some((re) => re.test(s))) {
+      if (!this.riskHold) L.warn("[onebot] 疑似风控信号: " + s);
+      this.riskHold = true;
+      this._holdUntil = Date.now() + Math.min(60000, 5000 * Math.pow(2, Math.min(4, this.failStreak - 1)));
+      this.emit({ type: "meta", subType: "risk", message: s, holdMs: this._holdUntil - Date.now() });
+    }
+  }
+  // 主动 API 门禁：串行节流 + 风控暂停
+  async _pace() {
+    if (this.riskHold) {
+      const wait = this._holdUntil - Date.now();
+      if (wait > 0) throw new Error("风控暂停中，主动拉取已暂停 " + Math.ceil(wait / 1000) + "s（如持续请停用小号降低频率）");
+      this.riskHold = false;
+    }
+    const now = Date.now();
+    const wait = Math.max(0, this.apiMinInterval - (now - this._lastCallAt));
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    this._lastCallAt = Date.now();
+  }
+
   call(action, params = {}, timeout = 10000) {
     if (!isReadOnlyAction(action)) return readOnlyError(action); // 只读护栏：写操作一律拒绝
+    // 降风险门禁：串行节流 + 风控暂停；统一记账成功/失败（事件接收不受影响，只限主动 API）
+    return this._pace()
+      .then(() => this._callRaw(action, params, timeout))
+      .then((data) => { this._noteSuccess(); return data; })
+      .catch((e) => { this._noteFailure(action, e && e.message); throw e; });
+  }
+
+  // 原始执行体（无门禁；被 call() 统一调用，便于测试与记账）
+  _callRaw(action, params = {}, timeout = 10000) {
     // 1) 优先：正向 WS 通道（NapCat 正向连接下 WS 同时支持事件+API 请求）
     if (this.connected && this.ws && this.ws.readyState === 1) {
       return new Promise((resolve, reject) => {

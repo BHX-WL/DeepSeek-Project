@@ -48,7 +48,7 @@ contextBridge.exposeInMainWorld("sentinelApi", {
   autostartSet: safe("autostart:set"),
 
   on: (channel, fn) => {
-    const valid = ["bot:connected", "bot:disconnected", "bot:reconnecting", "bot:connect-failed", "bot:connecting", "bot:event", "groups:updated", "summary:done", "bots:updated"];
+    const valid = ["bot:connected", "bot:disconnected", "bot:reconnecting", "bot:risk", "bot:connect-failed", "bot:connecting", "bot:event", "groups:updated", "summary:done", "bots:updated"];
     if (!valid.includes(channel)) return () => {};
     const handler = (_e, payload) => fn(payload);
     ipcRenderer.on(channel, handler);

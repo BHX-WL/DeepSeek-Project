@@ -37,6 +37,10 @@ describe("core/config", () => {
     assert.strictEqual(d.napcat.mode, "forward");
     assert.strictEqual(d.summarize.dailyHour, 22);
     assert.strictEqual(d.deepseek.baseUrl, "https://api.deepseek.com");
+    assert.ok(d.monitor, "缺 monitor");
+    assert.strictEqual(d.watch.collectHistoryDays, 0, "保守默认：不回拉");
+    assert.strictEqual(d.monitor.announcePollMinutes, 60);
+    assert.strictEqual(d.monitor.botScanAuto, false);
   });
 
   it("load() 返回默认值（无配置文件）", () => {

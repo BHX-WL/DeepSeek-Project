@@ -145,7 +145,8 @@ function broadcast(channel, payload) {
       }
     } catch (e) { L.warn("[bot] auto-launch napcat:", e.message); }
     const wsUrl = config.get("napcat.wsUrl");
-    client = new OneBotClient({ wsUrl, token: config.get("napcat.token") });
+    client = new OneBotClient({
+      apiMinIntervalMs: Number(config.get("monitor.apiMinIntervalMs")) || 250, wsUrl, token: config.get("napcat.token") });
     collector = new Collector(client);
     summarizer = new Summarizer(client, collector);
     collector.attach();
@@ -526,6 +527,8 @@ function wireBotEvents(src) {
         broadcast("bot:disconnected", {});
       } else if (evt.subType === "reconnecting") {
         broadcast("bot:reconnecting", { attempt: evt.attempt, delay: evt.delay });
+      } else if (evt.subType === "risk") {
+        broadcast("bot:risk", { message: evt.message || "" });
       }
       return;
     }
@@ -692,18 +695,22 @@ function startTimers() {
     require("./core/hotspots").fetchHotspots(true).catch(() => {});
   }, 15 * 60000));
 
+  // 公告轮询（降风险：默认 60 分钟一次，可在设置调整）
+  const pollMs = (Number(config.get("monitor.announcePollMinutes")) || 60) * 60000;
   timers.push(setInterval(() => {
     if (!collector || !client?.connected) return;
-    // 只轮询指定群（watch.groups 非空时），其他群不碰
     const groups = store.listGroups().filter((g) => collector.isWatchedGroup(g.groupId));
     for (const g of groups) collector.refreshAnnouncements(g.groupId).catch(() => {});
-  }, 30 * 60000)); // 每 30 分钟查公告
+  }, pollMs));
 
-  timers.push(setInterval(() => {
-    if (!client || !client.connected) return;
-    // 每 6 小时重扫机器人（成员变动/新机器人）
-    scanAndAutoIgnore().catch(() => {});
-  }, 6 * 60 * 60000));
+  // 机器人周期扫描（降风险：默认关闭=手动；开启时按配置间隔）
+  if (config.get("monitor.botScanAuto")) {
+    const scanMs = (Number(config.get("monitor.botScanHours")) || 24) * 60 * 60000;
+    timers.push(setInterval(() => {
+      if (!client || !client.connected) return;
+      scanAndAutoIgnore().catch(() => {});
+    }, scanMs));
+  }
 
   timers.push(setInterval(() => {
     if (!summarizer || !client?.connected) return;

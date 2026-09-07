@@ -133,3 +133,53 @@ describe("onebot 重连韧性", () => {
     assert.strictEqual(c._reconnectTimer, null);
   });
 });
+// ---------- 降风险：风控信号 / 节流 / 退避 ----------
+describe("onebot 降风险机制", () => {
+  it("风控文案命中 → riskHold + emit risk", async () => {
+    const { OneBotClient } = require("../core/onebot");
+    const c = new OneBotClient({ wsUrl: "ws://127.0.0.1:1", apiMinIntervalMs: 0 });
+    const metas = [];
+    c.onEvent((e) => { if (e.type === "meta") metas.push(e); });
+    c._noteFailure("get_group_msg_history", "请求频繁，请稍后再试");
+    assert.strictEqual(c.riskHold, true);
+    const risk = metas.find((m) => m.subType === "risk");
+    assert.ok(risk, "应 emit risk");
+    assert.ok(c._holdUntil > Date.now());
+    // hold 中主动调用快速失败（不 sleep）
+    await assert.rejects(c.call("get_group_list", {}), /风控暂停/);
+    c.stop();
+  });
+  it("普通网络失败不触发 risk，但累计 failStreak", () => {
+    const { OneBotClient } = require("../core/onebot");
+    const c = new OneBotClient({ apiMinIntervalMs: 0 });
+    c._noteFailure("x", "ECONNREFUSED connect");
+    assert.strictEqual(c.riskHold, false);
+    assert.ok(c.failStreak >= 1);
+  });
+  it("成功复位 failStreak；hold 过期后解锁", async () => {
+    const { OneBotClient } = require("../core/onebot");
+    const c = new OneBotClient({ apiMinIntervalMs: 0 });
+    c._noteFailure("x", "请求频繁");
+    assert.strictEqual(c.riskHold, true);
+    c._holdUntil = Date.now() - 1; // 模拟 hold 结束
+    c._noteSuccess();
+    assert.strictEqual(c.riskHold, false);
+    assert.strictEqual(c.failStreak, 0);
+    // 解锁后 call 可执行（stub 掉 _callRaw 避免触网）
+    const order = [];
+    c._callRaw = async () => { order.push("ok"); return {}; };
+    const r = await c.call("get_login_info", {});
+    assert.deepStrictEqual(order, ["ok"]);
+    c.stop();
+  });
+  it("串行节流：并发 call 依序执行", async () => {
+    const { OneBotClient } = require("../core/onebot");
+    const c = new OneBotClient({ apiMinIntervalMs: 0 });
+    const order = [];
+    c._callRaw = async () => { order.push(Date.now()); return {}; };
+    await Promise.all([c.call("get_login_info", {}), c.call("get_group_list", {}), c.call("get_msg", {})]);
+    assert.strictEqual(order.length, 3);
+    assert.ok(order[2] >= order[0], "后到 call 不应早于先到执行");
+    c.stop();
+  });
+});
