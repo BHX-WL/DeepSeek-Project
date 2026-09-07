@@ -550,6 +550,69 @@ function initReportPeriod() {
 }
 
 // ---------- 事件绑定 ----------
+  // 关键词命中记录模态框
+  async function openKwHits() {
+    const gid = $("#timeline-group").value;
+    if (!gid) { toast("请先在时间线选择群"); return; }
+    const box = $("#kw-hits-list");
+    const hint = $("#kw-hits-hint");
+    if (box) box.innerHTML = '<div class="empty">加载中…</div>';
+    if (hint) hint.textContent = "";
+    const hits = await api.kwHitsList(gid, 500);
+    const list = Array.isArray(hits) ? hits : [];
+    $("#kw-hits-modal").classList.remove("hidden");
+    if (!list.length) {
+      if (box) box.innerHTML = '<div class="empty">该群暂无关键词命中记录（先在设置页添加关键词）</div>';
+      return;
+    }
+    if (box) box.innerHTML = list.map((h) => `
+      <div class="event-item kw-hit">
+        <div class="event-head">
+          <span class="event-title"><span class="event-tag">关键词</span>🔑 ${esc((h.words || []).join("、"))}</span>
+          <span class="event-time">${fmtTime(h.time || h.savedAt)}</span>
+        </div>
+        <div class="event-body">${esc((h.nickname ? h.nickname + "：" : "") + (h.text || ""))}</div>
+      </div>`).join("");
+    if (hint) hint.textContent = "共 " + list.length + " 条（最近 " + list.length + " 条）";
+  }
+  function closeKwHits() { $("#kw-hits-modal").classList.add("hidden"); }
+  $("#btn-kw-hits").addEventListener("click", openKwHits);
+
+  // 报告页：监控词管理条
+  async function getKwList() {
+    const w = await api.configGet("watch");
+    return Array.isArray(w && w.keywords) ? w.keywords.filter(Boolean).map(String) : [];
+  }
+  async function renderKwBar() {
+    const chips = $("#kw-chips");
+    if (!chips) return;
+    const list = await getKwList();
+    if (!list.length) { chips.innerHTML = '<span class="spec-hint">未设置 → 先在上方输入监控词并点“添加”</span>'; return; }
+    chips.innerHTML = list.map((k) =>
+      '<span class="spec-chip">🔑 ' + esc(k) + ' <span class="del" data-del="' + esc(k) + '" title="移除监控词">✕</span></span>'
+    ).join("");
+    chips.querySelectorAll(".del").forEach((d) => d.addEventListener("click", async () => {
+      const kw = d.dataset.del;
+      const w = await api.configGet("watch") || {};
+      await api.configSet("watch", { ...w, keywords: (Array.isArray(w.keywords) ? w.keywords : []).filter((x) => String(x) !== kw) });
+      toast("已移除监控词：" + kw);
+      renderKwBar();
+    }));
+  }
+  async function addKwWord() {
+    const input = $("#kw-add-input");
+    const word = (input.value || "").trim();
+    if (!word) { toast("请输入关键词"); return; }
+    const w = await api.configGet("watch") || {};
+    const cur = Array.isArray(w.keywords) ? w.keywords.map(String) : [];
+    if (cur.some((x) => x.toLowerCase() === word.toLowerCase())) { toast("该词已在监控列表"); return; }
+    await api.configSet("watch", { ...w, keywords: [...cur, word] });
+    input.value = "";
+    toast("已添加监控词：" + word + "（命中即重点记录）");
+    renderKwBar();
+  }
+  $("#btn-kw-add").addEventListener("click", addKwWord);
+  $("#kw-add-input").addEventListener("keydown", (ev) => { if (ev.key === "Enter") addKwWord(); });
 function bind() {
   $$(".nav-item").forEach((b) => b.addEventListener("click", () => switchTab(b.dataset.tab)));
 
@@ -732,69 +795,7 @@ $("#btn-napcat-stop").addEventListener("click", async () => {
   $("#btn-export-md").addEventListener("click", () => doExport("md"));
   $("#btn-export-json").addEventListener("click", () => doExport("json"));
 
-  // 关键词命中记录模态框
-  async function openKwHits() {
-    const gid = $("#timeline-group").value;
-    if (!gid) { toast("请先在时间线选择群"); return; }
-    const box = $("#kw-hits-list");
-    const hint = $("#kw-hits-hint");
-    if (box) box.innerHTML = '<div class="empty">加载中…</div>';
-    if (hint) hint.textContent = "";
-    const hits = await api.kwHitsList(gid, 500);
-    const list = Array.isArray(hits) ? hits : [];
-    $("#kw-hits-modal").classList.remove("hidden");
-    if (!list.length) {
-      if (box) box.innerHTML = '<div class="empty">该群暂无关键词命中记录（先在设置页添加关键词）</div>';
-      return;
-    }
-    if (box) box.innerHTML = list.map((h) => `
-      <div class="event-item kw-hit">
-        <div class="event-head">
-          <span class="event-title"><span class="event-tag">关键词</span>🔑 ${esc((h.words || []).join("、"))}</span>
-          <span class="event-time">${fmtTime(h.time || h.savedAt)}</span>
-        </div>
-        <div class="event-body">${esc((h.nickname ? h.nickname + "：" : "") + (h.text || ""))}</div>
-      </div>`).join("");
-    if (hint) hint.textContent = "共 " + list.length + " 条（最近 " + list.length + " 条）";
-  }
-  function closeKwHits() { $("#kw-hits-modal").classList.add("hidden"); }
-  $("#btn-kw-hits").addEventListener("click", openKwHits);
 
-  // 报告页：监控词管理条
-  async function getKwList() {
-    const w = await api.configGet("watch");
-    return Array.isArray(w && w.keywords) ? w.keywords.filter(Boolean).map(String) : [];
-  }
-  async function renderKwBar() {
-    const chips = $("#kw-chips");
-    if (!chips) return;
-    const list = await getKwList();
-    if (!list.length) { chips.innerHTML = '<span class="spec-hint">未设置 → 先在上方输入监控词并点“添加”</span>'; return; }
-    chips.innerHTML = list.map((k) =>
-      '<span class="spec-chip">🔑 ' + esc(k) + ' <span class="del" data-del="' + esc(k) + '" title="移除监控词">✕</span></span>'
-    ).join("");
-    chips.querySelectorAll(".del").forEach((d) => d.addEventListener("click", async () => {
-      const kw = d.dataset.del;
-      const w = await api.configGet("watch") || {};
-      await api.configSet("watch", { ...w, keywords: (Array.isArray(w.keywords) ? w.keywords : []).filter((x) => String(x) !== kw) });
-      toast("已移除监控词：" + kw);
-      renderKwBar();
-    }));
-  }
-  async function addKwWord() {
-    const input = $("#kw-add-input");
-    const word = (input.value || "").trim();
-    if (!word) { toast("请输入关键词"); return; }
-    const w = await api.configGet("watch") || {};
-    const cur = Array.isArray(w.keywords) ? w.keywords.map(String) : [];
-    if (cur.some((x) => x.toLowerCase() === word.toLowerCase())) { toast("该词已在监控列表"); return; }
-    await api.configSet("watch", { ...w, keywords: [...cur, word] });
-    input.value = "";
-    toast("已添加监控词：" + word + "（命中即重点记录）");
-    renderKwBar();
-  }
-  $("#btn-kw-add").addEventListener("click", addKwWord);
-  $("#kw-add-input").addEventListener("keydown", (ev) => { if (ev.key === "Enter") addKwWord(); });
 
   $("#btn-kw-hits-close").addEventListener("click", closeKwHits);
 
