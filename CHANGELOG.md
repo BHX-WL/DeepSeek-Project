@@ -1,5 +1,13 @@
 # 更新日志 Changelog
 
+## v0.4.3（2026-09-07）—— 发布构建闭环
+
+### 📦 打包修复
+- electron-builder 的 extraResources 会裁掉 qq-sentinel 的 node_modules（ws/transformers）→ after-pack 补拷整棵 node_modules（缺失即终止，杜绝装上连不上的残次包）
+- after-pack 增加内置语义模型存在校验（缺失即终止）
+- 支持 QQS_USER_DATA 环境变量覆盖数据目录（便携/多开/干净验收）
+- 首版完整安装包：ImgOCR Setup 0.2.0.exe ~333MB（含语义模型+全部 v0.4 依赖）
+
 ## v0.4.2（2026-09-07）—— 更懂群聊
 
 ### 🧠 总结智能化
