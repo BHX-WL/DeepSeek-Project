@@ -376,9 +376,13 @@ async function loadSettings() {
   const llm = await api.configGet("ollama");
   const sm = await api.configGet("summarize");
   const mo = await api.configGet("monitor");
+  const gloss = await api.configGet("glossary");
   $("#set-ds-key").value = d.apiKey || "";
   $("#set-ds-model").value = d.model || "";
   $("#set-ds-base").value = d.baseUrl || "";
+  if (Array.isArray(gloss) && gloss.length) {
+    $("#set-glossary").value = gloss.map((g) => (g.word || "") + "=" + (g.meaning || "")).join("\n");
+  }
   if (sm) $("#set-summary-mode").value = sm.mode || "auto";
   if (llm) {
     $("#set-ollama-enabled").checked = llm.enabled !== false;
@@ -456,6 +460,13 @@ async function saveSettings() {
     collectHistoryDays: parseInt($("#set-history-days").value, 10) || 3,
     groups: $("#set-groups").value.split(",").map((s) => s.trim()).filter(Boolean),
   });
+  await api.configSet("glossary", ($("#set-glossary").value || "").split(/\r?\n/).map((ln) => {
+    const eq = ln.indexOf("=");
+    if (eq <= 0) return null;
+    const word = ln.slice(0, eq).trim();
+    const meaning = ln.slice(eq + 1).trim();
+    return word && meaning ? { word, meaning } : null;
+  }).filter(Boolean));
   await api.configSet("monitor", {
     announcePollMinutes: parseInt($("#set-announce-min").value, 10) || 60,
     apiMinIntervalMs: parseInt($("#set-api-interval").value, 10) || 250,
@@ -913,9 +924,11 @@ const ONBOARD_HTML = [
   "<li>在「群列表」勾选要监控的群（勾选=加入指定采集）。</li></ul>",
   "<p style=\"margin:0 0 8px\"><b>2️⃣ 设置关键词（可选）</b></p><ul style=\"margin:0 0 12px;padding-left:18px\">" +
   "<li>在「汇总报告」顶部添加监控词；命中后进时间线并逐条存档，报告自带命中统计。</li></ul>",
-  "<p style=\"margin:0 0 8px\"><b>3️⃣ 生成汇总</b></p><ul style=\"margin:0 0 12px;padding-left:18px\">" +
+  "<p style=\"margin:0 0 8px\"><b>3️⃣ 生成汇总</b></p><ul style=\"margin:0 0 8px;padding-left:18px\">" +
   "<li>「汇总报告」点默认汇总（一周）或选自定义时段；</li>" +
-  "<li>无 Key 也会用内置模型做本地语义总结（离线免费）；填 DeepSeek Key 或本机 Ollama 可获得云端/更强总结。</li></ul>",
+  "<li>刚装好没有历史：保持在线，每天 22:00 自动生成当日汇总；或点下方按钮先回拉最近 1 天（主动拉取，量小风险低）；</li>" +
+  "<li>无 Key 也会用内置模型做本地语义总结（离线免费）；填 DeepSeek Key 或本机 Ollama 可更强。</li></ul>" +
+  "<p style=\"margin:0 0 12px\"><button id=\"btn-onboard-backfill\" class=\"btn small\">📥 现在回拉最近 1 天</button> <span id=\"onboard-backfill-hint\" class=\"saved-hint\"></span></p>",
   "<p style=\"margin:0 0 8px\"><b>4️⃣ 导出与提醒</b></p><ul style=\"margin:0 0 12px;padding-left:18px\">" +
   "<li>报告可导出 Markdown/JSON；设置页可开系统通知（@全体/公告/冲突/每日汇总）。</li></ul>",
   "<p style=\"color:var(--muted);font-size:12px\">设置 → 汇总引擎与本地 AI 可切换 DeepSeek / Ollama / 本地语义 / 本地统计。</p>"
@@ -932,6 +945,18 @@ function closeOnboard() {
   $("#onboard-modal").classList.add("hidden");
 }
 $("#btn-onboard-ok").addEventListener("click", closeOnboard);
+async function quickBackfill() {
+  const hint = $("#onboard-backfill-hint");
+  if (hint) { hint.textContent = "回拉中…"; hint.classList.add("show"); }
+  try {
+    const gs = await api.groupsList();
+    const gid = Array.isArray(gs) && gs.length ? String(gs[0].groupId) : "";
+    if (!gid) { if (hint) hint.textContent = "暂无群（先连接并勾选群）"; return; }
+    const r = await api.backfill(gid, 1);
+    if (hint) hint.textContent = (r && r.ok ? "✅ 已回拉群 " + gid + " 最近 1 天" : "回拉失败：" + ((r && r.error) || "")) ;
+  } catch (e) { if (hint) hint.textContent = "回拉失败：" + (e && e.message ? e.message : e); }
+}
+$("#btn-onboard-backfill").addEventListener("click", quickBackfill);
 $("#btn-onboard-close").addEventListener("click", closeOnboard);
 
 async function initDisclaimer() {

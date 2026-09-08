@@ -5,6 +5,7 @@
 const fs = require("fs");
 const path = require("path");
 const L = require("./logger");
+const glossaryUtil = require("./glossary");
 
 let _fePromise = null;
 
@@ -130,6 +131,15 @@ async function semanticSummarize(rows, opts = {}) {
     let clusters = 0, embedded = 0;
     for (const win of windows) {
       const sample = win.items.slice(-MAX_PER_WINDOW);
+      // 词表命中：窗口内文本出现的黑话/梗 → 给一句解释（最多 2 条/窗）
+      const glossHits = [];
+      if (opts.glossary && opts.glossary.length) {
+        const joined = sample.map((r) => r.text).join("\n");
+        for (const g of glossaryUtil.matchGlossary(joined, opts.glossary)) {
+          if (!glossHits.some((x) => x.word === g.word)) glossHits.push(g);
+          if (glossHits.length >= 2) break;
+        }
+      }
       const vectors = [];
       for (const r of sample) vectors.push(await embedOne(fe, r.text));
       embedded += sample.length;
@@ -156,6 +166,7 @@ async function semanticSummarize(rows, opts = {}) {
       if (!parts.length) continue;
       clusters += Math.min(parts.length, 3);
       if (win.day) lines.push("【" + String(win.day).slice(5) + "】");
+      if (glossHits.length) for (const g of glossHits) lines.push("   💬 「" + g.word + "」= " + g.meaning);
       // 关联热搜（collector 对消息打的 hotHits 聚合，去重 top2）
       const hotTitles = [];
       for (const r of sample) {

@@ -6,6 +6,7 @@ const ds = require("./deepseek");
 const ollama = require("./ollama");
 const { normalizeKeywords, keywordStats } = require("./keywords");
 const semantic = require("./semantic");
+const glossaryUtil = require("./glossary");
 const hotspots = require("./hotspots");
 const bots = require("./bots");
 
@@ -167,7 +168,7 @@ class Summarizer {
         try {
           const sres = await semantic.semanticSummarize(
             msgs.map((m) => ({ text: m.text || m.raw || "", time: m.time, nickname: m.nickname || m.card || m.userId, userId: m.userId, hotHits: m.hotHits })),
-            { ignoreUins: config.get("summarize.ignoreBotUins") || [] }
+            { ignoreUins: config.get("summarize.ignoreBotUins") || [], glossary: config.get("glossary") || [] }
           );
           if (sres && sres.text) {
             summary = `群号 ${gid} · ${fmtPeriod(since)} ~ ${fmtPeriod(until)}\n（本地语义摘要：内置模型聚类要点，离线免费）\n\n` + sres.text;
@@ -716,6 +717,13 @@ function buildDailyPrompt({ since, until, gid, msgs, anns, evts, label, day, hot
     lines.push("\n【系统事件】");
     for (const e of evts) lines.push(`- [${e.time.slice(0,16)}] ${e.kind}: ${e.title}`);
   }
+  try {
+    const gloss = config.get("glossary");
+    if (Array.isArray(gloss) && gloss.length) {
+      lines.push("\n【群内黑话/梗对照（消息出现这些词时可参考理解，不必逐条解释）】");
+      for (const g of gloss.slice(0, 80)) if (g && g.word) lines.push("- " + String(g.word).slice(0, 40) + "：" + String(g.meaning || "").slice(0, 150));
+    }
+  } catch (e) { /* 词表注入失败不影响 */ }
   lines.push(`\n【群消息 ${msgs.length} 条】`);
   for (const m of msgs) {
     lines.push(`[${(m.time||"").slice(11,16)}] ${m.nickname||m.userId}: ${(m.text||"").slice(0,120)}${m.images ? " [图]" : ""}${m.atAll ? " [@全体]" : ""}`);

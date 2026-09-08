@@ -16,6 +16,8 @@ const DEFAULTS = {
     qqPath: "",                   // QQ.exe 路径（空=自动探测注册表/默认路径）
     dataDir: "D:\\QQNT-MULTI-DATA", // 小号 NapCat 的独立数据目录
   },
+  // 黑话/梗词表：消息出现时，本地语义/AI 总结会用词条解释帮助“看懂”（格式 {word, meaning}）
+  glossary: [],
   watch: {
     groups: [],        // 监听群号列表（空 = 全部）
     collectHistoryDays: 0,  // 启动回拉历史天数（保守默认 0 = 不回拉，靠在线实时积累；过大回拉会增加风控风险）

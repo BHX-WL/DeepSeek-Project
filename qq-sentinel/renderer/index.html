@@ -211,7 +211,9 @@
           <label><input type="checkbox" id="set-autostart"> 开机自动启动本软件（随 Windows 启动）</label>
           <label><input type="checkbox" id="set-auto-launch-napcat"> 连接时自动启动 NapCat（如未运行）</label>
         </div>
-        <div class="panel">
+        <details class="advanced">
+          <summary>⚙️ 高级设置（小号QQ / 图片识别 / 热点库 / 风控与采集克制）</summary>
+          <div class="panel">
           <h3>小号 QQ（NapCat 专用）</h3>
           <label>QQ 路径 <input type="text" id="set-qq-path" placeholder="留空自动探测（如 D:\QQNT\QQ.exe）"></label>
           <label>独立数据目录 <input type="text" id="set-data-dir" placeholder="默认 D:\QQNT-MULTI-DATA"></label>
@@ -225,6 +227,12 @@
           <label><input type="checkbox" id="set-conflicts"> 启用吵架检测</label>
           <label>时间窗（分钟） <input type="number" id="set-conflict-win" min="1" max="60"></label>
           <label>触发消息数 <input type="number" id="set-conflict-min" min="3" max="100"></label>
+        </div>
+        <div class="panel">
+          <h3>📖 黑话 / 梗词表</h3>
+          <label style="display:block">每行一条：<b>词=解释</b>（群内出现该词时，总结会自动附一句解释，帮你看懂圈内话）<br>
+            <textarea id="set-glossary" rows="4" placeholder="例：四代目=群主继任者&#10;猪猪=群内机器人互动词" style="width:100%;margin-top:4px"></textarea>
+          </label>
         </div>
         <div class="panel">
           <h3>图片识别（全家桶互调）</h3>
@@ -256,6 +264,7 @@
           <label>自动扫描间隔（小时） <input type="number" id="set-botscan-hours" min="1" max="168" disabled title="需勾选自动扫描后生效"></label>
           <p class="hint" style="font-size:12px;color:var(--muted);margin:4px 0 0">遇到疑似风控（操作频繁/请求被限）时，应用会自动暂停主动拉取并提示。</p>
         </div>
+        </details>
         <div class="panel">
           <h3>🔔 系统通知</h3>
           <label><input type="checkbox" id="set-notify-enabled"> 启用系统通知</label>
