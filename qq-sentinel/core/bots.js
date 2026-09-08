@@ -15,7 +15,9 @@ function init(dir) {
   try {
     const f = path.join(_dir, "bots.json");
     if (fs.existsSync(f)) {
-      const j = JSON.parse(fs.readFileSync(f, "utf8"));
+      let raw = fs.readFileSync(f, "utf8");
+      if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
+      const j = JSON.parse(raw);
       if (j && typeof j === "object" && !Array.isArray(j)) _bots = j;
       if (j && j._scanned && typeof j._scanned === "object") _scanned = j._scanned;
     }

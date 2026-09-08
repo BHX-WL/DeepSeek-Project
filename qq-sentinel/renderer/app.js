@@ -3,6 +3,28 @@ const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => [...document.querySelectorAll(sel)];
 
 const api = window.sentinelApi;
+
+// 渲染层日志并入主进程 sentinel.log（发布后排障用）
+(function patchConsoleLog() {
+  try {
+    const lvls = ["error", "warn", "info", "log", "debug"];
+    for (let i = 0; i < lvls.length; i++) {
+      const lvl = lvls[i];
+      const orig = console[lvl] ? console[lvl].bind(console) : null;
+      if (!orig) continue;
+      console[lvl] = function () {
+        try {
+          const args = Array.prototype.slice.call(arguments);
+          const txt = args.map(function (x) {
+            try { return typeof x === "string" ? x : JSON.stringify(x); } catch (e) { return String(x); }
+          }).join(" ").slice(0, 700);
+          if (txt && api && api.sendLog) api.sendLog(lvl === "log" ? "info" : lvl, txt);
+        } catch (e) {}
+        orig.apply(null, arguments);
+      };
+    }
+  } catch (e) {}
+})();
 let state = { groups: [], events: {}, reports: {}, conn: false, currentGroup: null };
 
 // ---------- 工具 ----------
@@ -956,7 +978,11 @@ async function quickBackfill() {
     if (hint) hint.textContent = (r && r.ok ? "✅ 已回拉群 " + gid + " 最近 1 天" : "回拉失败：" + ((r && r.error) || "")) ;
   } catch (e) { if (hint) hint.textContent = "回拉失败：" + (e && e.message ? e.message : e); }
 }
-$("#btn-onboard-backfill").addEventListener("click", quickBackfill);
+// 动态插入的按钮（引导弹窗打开时才存在）→ 事件委托
+  document.addEventListener("click", function (ev) {
+    var t = ev.target;
+    if (t && t.id === "btn-onboard-backfill") { ev.preventDefault(); quickBackfill(); }
+  });
 $("#btn-onboard-close").addEventListener("click", closeOnboard);
 
 async function initDisclaimer() {

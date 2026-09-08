@@ -510,6 +510,18 @@ function registerIpc() {
   }));
   safeHandle("autostart:get", () => ({ enabled: getAutoStart() }));
   safeHandle("autostart:set", (_e, enabled) => setAutoStart(!!enabled));
+
+  // 渲染层日志并入主进程统一日志（发布后排障用）
+  ipcMain.on("renderer:log", (e, p) => {
+    try {
+      if (!win || e.sender !== win.webContents) return; // 只收本窗口
+      const msg = String((p && p.msg) || "");
+      if (!msg) return;
+      const lvl = (p && p.level) === "warn" ? "warn" : (p && p.level) === "error" ? "error" : (p && p.level) === "debug" ? "debug" : "info";
+      const fn = L[lvl] || L.info;
+      fn.call(L, "[renderer] " + msg);
+    } catch (err) { /* 日志失败不影响 */ }
+  });
 }
 
 // ---------------- 机器人事件 → UI ----------------

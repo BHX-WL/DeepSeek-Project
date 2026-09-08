@@ -228,7 +228,18 @@ function reload() {
   const cp = configPath();
   if (cp && fs.existsSync(cp)) {
     try {
-      const saved = JSON.parse(fs.readFileSync(cp, "utf8"));
+      let raw = fs.readFileSync(cp, "utf8");
+      // BOM 根治：配置带 BOM 会导致解析失败并静默回默认（历史踩坑）→ 剥除并回写清理
+      if (raw.charCodeAt(0) === 0xfeff) {
+        raw = raw.slice(1);
+        try {
+          const tmp = cp + ".tmp";
+          fs.writeFileSync(tmp, raw, "utf8");
+          fs.renameSync(tmp, cp);
+          log("配置文件带 BOM，已自动清理");
+        } catch (e2) { log("BOM 清理回写失败: " + e2.message); }
+      }
+      const saved = JSON.parse(raw);
       if (saved && typeof saved === "object" && !Array.isArray(saved)) {
         base = deepMerge(DEFAULTS, saved);
       } else {

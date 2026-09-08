@@ -49,7 +49,8 @@ function kwFile(gid) {
 
 function loadGroups() {
   try {
-    const raw = fs.readFileSync(groupFile(), "utf8");
+    let raw = fs.readFileSync(groupFile(), "utf8");
+    if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
     const arr = JSON.parse(raw);
     if (!Array.isArray(arr)) return; // 结构异常：丢弃
     for (const g of arr) {

@@ -158,4 +158,17 @@ describe("core/config", () => {
     assert.ok(bakRaw);
   });
 
+
+  it("带 BOM 的配置文件可读且自动回写清理", () => {
+    const c = freshConfig();
+    c.setDataDir(tmpDir);
+    const bom = String.fromCharCode(0xfeff);
+    const raw = bom + JSON.stringify({ napcat: { wsUrl: "ws://bom-test:3001" } });
+    fs.writeFileSync(path.join(tmpDir, "config.json"), raw, "utf8");
+    const loaded = c.load();
+    assert.strictEqual(loaded.napcat.wsUrl, "ws://bom-test:3001", "BOM 文件应能正常解析");
+    const after = fs.readFileSync(path.join(tmpDir, "config.json"), "utf8");
+    assert.strictEqual(after.charCodeAt(0) === 0xfeff, false, "回写后不应再有 BOM");
+  });
+
 });

@@ -46,6 +46,7 @@ contextBridge.exposeInMainWorld("sentinelApi", {
   hubOpenImgocr: safe("hub:openImgocr"),
   autostartGet: safe("autostart:get"),
   autostartSet: safe("autostart:set"),
+  sendLog: (level, msg) => { try { ipcRenderer.send("renderer:log", { level: String(level || "info"), msg: String(msg || "").slice(0, 800) }); } catch (e) {} },
 
   on: (channel, fn) => {
     const valid = ["bot:connected", "bot:disconnected", "bot:reconnecting", "bot:risk", "bot:connect-failed", "bot:connecting", "bot:event", "groups:updated", "summary:done", "bots:updated"];
