@@ -9,7 +9,7 @@
 
 > 需要源码/自己构建的开发者请看下方「从源码构建」。
 >
-> **安装包校验（SHA256）**：`dabb61dbc5421e1a90e2588ddd1a7ad5df9b894d2d1797176021483b0bf734c8`（ImgOCR.Setup.0.2.0.exe，v0.4.x 全家桶）
+> **安装包校验（SHA256）**：`791d57916d2f134a72dfbef197b2c0bdbc3af4cf025971eb7e1e7002f4afa888`（ImgOCR.Setup.0.2.0.exe，v0.4.x 全家桶）
 
 ---# QQ 群大事监控全家桶（ImgOCR + QQ Sentinel + NapCat）
 
